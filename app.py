@@ -4,7 +4,6 @@ from datetime import datetime, date, timedelta
 import database as db
 import plotly.express as px
 import os
-import shutil
 import requests
 import math
 import time
@@ -18,10 +17,6 @@ from io import BytesIO
 from pyngrok import ngrok
 from fpdf import FPDF
 import hashlib
-
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-IMAGENS_DIR = os.getenv("MALAEXPRESS_IMAGES_DIR", os.path.join(BASE_DIR, "imagens_malas"))
-BUNDLED_IMAGENS_DIR = os.path.join(BASE_DIR, "imagens_malas")
 
 # Cache para coordenadas CEP
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -106,60 +101,6 @@ if 'db_initialized' not in st.session_state:
         pass
         
     st.session_state['db_initialized'] = True
-
-if 'authenticated' not in st.session_state:
-    st.session_state.authenticated = False
-if 'user_id' not in st.session_state:
-    st.session_state.user_id = None
-if 'username' not in st.session_state:
-    st.session_state.username = None
-if 'user_name' not in st.session_state:
-    st.session_state.user_name = None
-if 'user_role' not in st.session_state:
-    st.session_state.user_role = None
-
-def usuario_admin():
-    return st.session_state.get('user_role') == "admin"
-
-def usuario_socio():
-    return st.session_state.get('user_role') == "socio"
-
-def paginas_permitidas():
-    if usuario_socio():
-        return ["Dashboard", "Novo Aluguel", "Devoluções", "Calendário de Reservas"]
-    return ["Dashboard", "Cadastrar Mala", "Cadastrar Cliente", "Novo Aluguel", "Devoluções", "Calendário de Reservas", "Análise Financeira", "Contrato de Aluguel", "🚚 Calculadora de Frete", "📱 Acesso Mobile"]
-
-def logout():
-    st.session_state.authenticated = False
-    st.session_state.user_id = None
-    st.session_state.username = None
-    st.session_state.user_name = None
-    st.session_state.user_role = None
-    st.session_state.page = "Dashboard"
-
-if not st.session_state.authenticated:
-    st.title("🧳 MalaExpress - Controle de Aluguéis")
-    st.subheader("Acesso ao Sistema")
-    with st.form("login_form", clear_on_submit=False):
-        username = st.text_input("Usuário")
-        password = st.text_input("Senha", type="password")
-        submit_login = st.form_submit_button("Entrar")
-
-    if submit_login:
-        ok, msg, user = db.autenticar_usuario(username, password)
-        if ok:
-            st.session_state.authenticated = True
-            st.session_state.user_id = user["id"]
-            st.session_state.username = user["username"]
-            st.session_state.user_name = user["nome"]
-            st.session_state.user_role = user["perfil"]
-            st.session_state.page = "Dashboard"
-            st.rerun()
-        else:
-            st.error(msg)
-
-    st.info("Use suas credenciais para acessar o sistema.")
-    st.stop()
 
 import calendar as py_calendar
 
@@ -710,14 +651,8 @@ def invalidate_cache():
     get_gestores_cached.clear()
 
 # Criar pasta de imagens se não existir
-if not os.path.exists(IMAGENS_DIR):
-    os.makedirs(IMAGENS_DIR)
-if os.path.abspath(IMAGENS_DIR) != os.path.abspath(BUNDLED_IMAGENS_DIR) and os.path.exists(BUNDLED_IMAGENS_DIR):
-    for nome_arquivo in os.listdir(BUNDLED_IMAGENS_DIR):
-        origem = os.path.join(BUNDLED_IMAGENS_DIR, nome_arquivo)
-        destino = os.path.join(IMAGENS_DIR, nome_arquivo)
-        if os.path.isfile(origem) and not os.path.exists(destino):
-            shutil.copy2(origem, destino)
+if not os.path.exists("imagens_malas"):
+    os.makedirs("imagens_malas")
 
 # Título Principal
 st.title("🧳 MalaExpress - Controle de Aluguéis")
@@ -739,24 +674,39 @@ try:
 except Exception:
     is_external = False
 
-# Navegação Lateral
-menu = paginas_permitidas()
-perfil_label = "Administrador" if usuario_admin() else "Sócio"
-
-st.sidebar.markdown(f"**Usuário:** {st.session_state.user_name}")
-st.sidebar.markdown(f"**Perfil:** {perfil_label}")
-if st.sidebar.button("Sair"):
-    logout()
+# Se acesso externo E mobile E NÃO é a rede local, restringir a Novo Aluguel
+if is_external and is_mobile and st.session_state.page == "Dashboard":
+    st.warning("📱 Acesso mobile externo restrito. Redirecionando para Novo Aluguel...")
+    st.session_state.page = "Novo Aluguel"
     st.rerun()
 
-if st.session_state.page not in menu:
-    st.session_state.page = menu[0]
+# Navegação Lateral
+menu_restrito = ["Novo Aluguel"]
+menu_completo = ["Dashboard", "Cadastrar Mala", "Cadastrar Cliente", "Novo Aluguel", "Devoluções", "Calendário de Reservas", "Análise Financeira", "Contrato de Aluguel", "🚚 Calculadora de Frete", "📱 Acesso Mobile"]
+
+# Se acesso externo + mobile, mostra só o menu restrito
+menu = menu_restrito if (is_external and is_mobile) else menu_completo
+
+# Mostrar info de conexão
+if is_external and is_mobile:
+    st.info("📱 **Modo Mobile Externo** — Apenas 'Novo Aluguel' disponível.")
 
 # Sincronizar sidebar com session_state
 choice = st.sidebar.radio("Menu", menu, index=menu.index(st.session_state.page) if st.session_state.page in menu else 0)
 # Atualizar page se o usuário mudar manualmente no sidebar
 if choice != st.session_state.page:
-    st.session_state.page = choice
+    # Se acesso externo + mobile, não permite mudar para outras páginas
+    if is_external and is_mobile and choice != "Novo Aluguel":
+        st.warning("📱 Acesso restrito. Apenas 'Novo Aluguel' está disponível.")
+        choice = st.session_state.page  # Não muda
+    else:
+        st.session_state.page = choice
+    st.rerun()
+
+# Se tentar acessar página restrita via URL (não sidebar), redirecionar
+if is_external and is_mobile and st.session_state.page != "Novo Aluguel":
+    st.warning("📱 Acesso mobile externo restrito. Apenas 'Novo Aluguel' está disponível.")
+    st.session_state.page = "Novo Aluguel"
     st.rerun()
 
 # --- DASHBOARD ---
@@ -883,36 +833,26 @@ if st.session_state.page == "Dashboard":
                         st.markdown(f"Status: :{status_color}[{row['status']}]")
                         
                         if row['status'] == 'Disponível':
-                            if usuario_admin():
-                                col_btn1, col_btn2 = st.columns(2)
-                                with col_btn1:
-                                    if st.button(f"Alugar {row['codigo']}", key=f"btn_rent_{row['id']}"):
-                                        navigate_to("Novo Aluguel", mala_id=row['id'])
-                                        st.rerun()
-                                with col_btn2:
-                                    if st.button(f"✏️ Editar", key=f"btn_edit_gal_{row['id']}"):
-                                        st.session_state['edit_mala_id'] = row['id']
-                                        st.session_state.page = "Cadastrar Mala"
-                                        st.rerun()
-                            else:
+                            col_btn1, col_btn2 = st.columns(2)
+                            with col_btn1:
                                 if st.button(f"Alugar {row['codigo']}", key=f"btn_rent_{row['id']}"):
                                     navigate_to("Novo Aluguel", mala_id=row['id'])
                                     st.rerun()
+                            with col_btn2:
+                                if st.button(f"✏️ Editar", key=f"btn_edit_gal_{row['id']}"):
+                                    st.session_state['edit_mala_id'] = row['id']
+                                    st.session_state.page = "Cadastrar Mala"
+                                    st.rerun()
                         else:
-                            if usuario_admin():
-                                col_btn1, col_btn2 = st.columns(2)
-                                with col_btn1:
-                                    if st.button(f"📅 Agendar", key=f"btn_rent_fut_{row['id']}"):
-                                        navigate_to("Novo Aluguel", mala_id=row['id'])
-                                        st.rerun()
-                                with col_btn2:
-                                    if st.button(f"✏️ Editar", key=f"btn_edit_gal2_{row['id']}"):
-                                        st.session_state['edit_mala_id'] = row['id']
-                                        st.session_state.page = "Cadastrar Mala"
-                                        st.rerun()
-                            else:
+                            col_btn1, col_btn2 = st.columns(2)
+                            with col_btn1:
                                 if st.button(f"📅 Agendar", key=f"btn_rent_fut_{row['id']}"):
                                     navigate_to("Novo Aluguel", mala_id=row['id'])
+                                    st.rerun()
+                            with col_btn2:
+                                if st.button(f"✏️ Editar", key=f"btn_edit_gal2_{row['id']}"):
+                                    st.session_state['edit_mala_id'] = row['id']
+                                    st.session_state.page = "Cadastrar Mala"
                                     st.rerun()
     else:
         st.info("Nenhuma mala cadastrada.")
@@ -1022,7 +962,8 @@ elif st.session_state.page == "Cadastrar Mala":
                     nome_arquivo = f"{codigo_final}_{int(datetime.now().timestamp())}.{extensao}"
                     
                     # Caminhos
-                    caminho_completo = os.path.join(IMAGENS_DIR, nome_arquivo)
+                    caminho_relativo = f"imagens_malas/{nome_arquivo}"
+                    caminho_completo = os.path.join("imagens_malas", nome_arquivo)
                     
                     # Salvar
                     if img.mode != 'RGB':
@@ -1030,7 +971,8 @@ elif st.session_state.page == "Cadastrar Mala":
                         
                     img.save(caminho_completo)
                     
-                    imagem_path = caminho_completo
+                    # Salvar no banco o caminho relativo
+                    imagem_path = caminho_relativo
                 except Exception as e:
                     st.error(f"Erro ao salvar imagem: {e}")
             
@@ -1185,13 +1127,14 @@ elif st.session_state.page == "Cadastrar Mala":
                                 extensao = "jpg"
                                 
                             nome_arquivo = f"{mala_edit_selecionada['codigo']}_edit_{int(datetime.now().timestamp())}.{extensao}"
-                            caminho_completo = os.path.join(IMAGENS_DIR, nome_arquivo)
+                            caminho_relativo = f"imagens_malas/{nome_arquivo}"
+                            caminho_completo = os.path.join("imagens_malas", nome_arquivo)
                             
                             if img.mode != 'RGB':
                                 img = img.convert('RGB')
                                 
                             img.save(caminho_completo)
-                            novo_imagem_path = caminho_completo
+                            novo_imagem_path = caminho_relativo
                          except Exception as e:
                             st.error(f"Erro ao salvar imagem: {e}")
                     
@@ -1497,9 +1440,6 @@ elif st.session_state.page == "Cadastrar Cliente":
 # --- NOVO ALUGUEL ---
 elif st.session_state.page == "Novo Aluguel":
     st.subheader("Registrar Novo Aluguel")
-    usuario_pode_editar_valores = usuario_admin()
-    if not usuario_pode_editar_valores:
-        st.warning("Perfil sócio pode registrar reservas, mas não pode alterar valores. Esta reserva será salva com valores zerados para revisão do administrador.")
     
     with st.expander("Passo 1: Selecionar Período da Viagem", expanded=True):
         col_data1, col_data2 = st.columns(2)
@@ -1652,10 +1592,10 @@ elif st.session_state.page == "Novo Aluguel":
                         st.success(f"🚚 **Frete Estimado:** R$ {frete_calculado:,.2f} ({dist_total_frete:.0f} km x R$ {valor_km_frete:.2f}/km)")
                 
                 col_val1, col_val2, col_val3, col_val4 = st.columns(4)
-                valor = col_val1.number_input("Valor do Aluguel (R$)", min_value=0.0, step=10.0, disabled=not usuario_pode_editar_valores)
-                taxa_entrega = col_val2.number_input("Taxa de Entrega (R$)", min_value=0.0, step=5.0, help="Valor cobrado para levar/buscar a mala.", disabled=not usuario_pode_editar_valores)
-                valor_acessorios = col_val3.number_input("Valor Acessórios (R$)", min_value=0.0, step=5.0, disabled=not usuario_pode_editar_valores)
-                valor_sinal = col_val4.number_input("Valor Sinal/Reserva (R$)", min_value=0.0, step=10.0, help="Valor pago adiantado.", disabled=not usuario_pode_editar_valores)
+                valor = col_val1.number_input("Valor do Aluguel (R$)", min_value=0.0, step=10.0)
+                taxa_entrega = col_val2.number_input("Taxa de Entrega (R$)", min_value=0.0, step=5.0, help="Valor cobrado para levar/buscar a mala.")
+                valor_acessorios = col_val3.number_input("Valor Acessórios (R$)", min_value=0.0, step=5.0)
+                valor_sinal = col_val4.number_input("Valor Sinal/Reserva (R$)", min_value=0.0, step=10.0, help="Valor pago adiantado.")
                 
                 total_geral = valor + taxa_entrega + valor_acessorios
                 st.markdown(f"**💰 Total a Pagar:** R$ {total_geral:.2f}")
@@ -1663,21 +1603,12 @@ elif st.session_state.page == "Novo Aluguel":
                 observacao = st.text_area("📝 Observação / Lembrete", placeholder="Ex: Cliente pediu para lembra-lo sobre...")
                 
                 col_pag1, col_pag2 = st.columns(2)
-                pago = col_pag1.checkbox("Pagamento TOTAL já realizado?", value=False, help="Marque apenas se o cliente pagou TUDO (Aluguel + Taxa).", disabled=not usuario_pode_editar_valores)
-                is_permuta = col_pag2.checkbox("🤝 É Parceria/Permuta?", value=False, help="Marque se for troca de serviços (ex: Influencer). O valor não entrará no caixa.", disabled=not usuario_pode_editar_valores)
+                pago = col_pag1.checkbox("Pagamento TOTAL já realizado?", value=False, help="Marque apenas se o cliente pagou TUDO (Aluguel + Taxa).")
+                is_permuta = col_pag2.checkbox("🤝 É Parceria/Permuta?", value=False, help="Marque se for troca de serviços (ex: Influencer). O valor não entrará no caixa.")
                 
                 submit = st.form_submit_button("Confirmar Aluguel")
                 
             if submit:
-                if not usuario_pode_editar_valores:
-                    valor = 0.0
-                    taxa_entrega = 0.0
-                    valor_acessorios = 0.0
-                    valor_sinal = 0.0
-                    pago = False
-                    is_permuta = False
-                    total_geral = 0.0
-
                 # Definir status de pagamento
                 status_custom = None
                 if is_permuta:
@@ -1716,9 +1647,6 @@ elif st.session_state.page == "Novo Aluguel":
 # --- DEVOLUÇÕES E GERENCIAMENTO DE ALUGUÉIS --- (Revertido para versão estável)
 elif st.session_state.page == "Devoluções":
     st.subheader("Gerenciar Aluguéis Ativos e Devoluções")
-    usuario_pode_editar_valores = usuario_admin()
-    if not usuario_pode_editar_valores:
-        st.warning("Perfil sócio pode consultar, reservar, prorrogar sem valor adicional e registrar devolução, mas não pode alterar valores ou status financeiros.")
     
     alugueis_ativos = db.get_alugueis_ativos()
     
@@ -1856,20 +1784,18 @@ elif st.session_state.page == "Devoluções":
                         
                         with st.expander(titulo_expander):
                             # Campo Destino Editável
-                            novo_destino = st.text_input("Destino", value=row.get('destino', '') or '', key=f"dest_{row['id']}", disabled=not usuario_pode_editar_valores)
+                            novo_destino = st.text_input("Destino", value=row.get('destino', '') or '', key=f"dest_{row['id']}")
                             
                             col_edit_1, col_edit_2, col_edit_3, col_edit_4 = st.columns(4)
-                            novo_valor = col_edit_1.number_input(f"Valor Aluguel", min_value=0.0, step=10.0, value=valor_atual, key=f"val_{row['id']}", disabled=not usuario_pode_editar_valores)
-                            nova_taxa = col_edit_2.number_input(f"Taxa Entrega", min_value=0.0, step=5.0, value=taxa_entrega_atual, key=f"taxa_{row['id']}", disabled=not usuario_pode_editar_valores)
-                            novo_valor_acessorios = col_edit_3.number_input(f"Valor Acessórios", min_value=0.0, step=5.0, value=valor_acessorios_atual, key=f"acess_{row['id']}", disabled=not usuario_pode_editar_valores)
-                            novo_sinal = col_edit_4.number_input(f"Sinal Pago", min_value=0.0, step=10.0, value=valor_sinal_atual, key=f"sinal_{row['id']}", disabled=not usuario_pode_editar_valores)
+                            novo_valor = col_edit_1.number_input(f"Valor Aluguel", min_value=0.0, step=10.0, value=valor_atual, key=f"val_{row['id']}")
+                            nova_taxa = col_edit_2.number_input(f"Taxa Entrega", min_value=0.0, step=5.0, value=taxa_entrega_atual, key=f"taxa_{row['id']}")
+                            novo_valor_acessorios = col_edit_3.number_input(f"Valor Acessórios", min_value=0.0, step=5.0, value=valor_acessorios_atual, key=f"acess_{row['id']}")
+                            novo_sinal = col_edit_4.number_input(f"Sinal Pago", min_value=0.0, step=10.0, value=valor_sinal_atual, key=f"sinal_{row['id']}")
                             
-                            if usuario_pode_editar_valores and st.button("Salvar Valores/Destino", key=f"btn_save_{row['id']}"):
+                            if st.button("Salvar Valores/Destino", key=f"btn_save_{row['id']}"):
                                 db.update_aluguel_valor(row['id'], novo_valor, novo_sinal, nova_taxa, novo_valor_acessorios, novo_destino)
                                 st.success("Atualizado com sucesso!")
                                 st.rerun()
-                            if not usuario_pode_editar_valores:
-                                st.info("Somente o administrador pode alterar valores, sinal, taxa, acessórios e destino.")
                             
                             st.divider()
                             st.write(f"**Aluguel:** R$ {novo_valor:.2f} + **Entrega:** R$ {nova_taxa:.2f} + **Acessórios:** R$ {novo_valor_acessorios:.2f}")
@@ -1882,9 +1808,7 @@ elif st.session_state.page == "Devoluções":
                             st.write("---")
                             st.write("Status do Pagamento:")
                             
-                            if not usuario_pode_editar_valores:
-                                st.info(f"Status atual: {status_pagto}")
-                            elif status_pagto == 'Permuta':
+                            if status_pagto == 'Permuta':
                                 st.info("🤝 **Permuta/Parceria**")
                                 if st.button("Mudar para Pendente", key=f"btn_pend_perm_{row['id']}"):
                                     db.update_aluguel_pagamento(row['id'], 'Pendente')
@@ -1905,11 +1829,11 @@ elif st.session_state.page == "Devoluções":
                                     st.rerun()
                     
                     with st.expander("💥 Quebra da Mala (Cliente)"):
-                        valor_avaria = st.number_input("Valor cobrado pela quebra (R$)", min_value=0.0, step=10.0, value=0.0, key=f"av_val_{row['id']}", disabled=not usuario_pode_editar_valores)
+                        valor_avaria = st.number_input("Valor cobrado pela quebra (R$)", min_value=0.0, step=10.0, value=0.0, key=f"av_val_{row['id']}")
                         obs_avaria = st.text_input("Observação (Opcional)", value="", key=f"av_obs_{row['id']}")
                         confirmar_quebra = st.checkbox("Confirmo que a mala será retirada do sistema", value=False, key=f"av_conf_{row['id']}")
 
-                        if st.button("Registrar Quebra e Retirar Mala", key=f"btn_quebra_{row['id']}", type="secondary", disabled=(not confirmar_quebra or not usuario_pode_editar_valores)):
+                        if st.button("Registrar Quebra e Retirar Mala", key=f"btn_quebra_{row['id']}", type="secondary", disabled=not confirmar_quebra):
                             mala_id_atual = int(row['mala_id']) if 'mala_id' in row and pd.notna(row['mala_id']) else None
                             if mala_id_atual is None:
                                 df_tmp = db.get_malas()
@@ -1959,11 +1883,10 @@ elif st.session_state.page == "Devoluções":
                         st.write(f"**Data atual de retorno:** {dt_prevista.strftime('%d/%m/%Y')}")
                         st.write(f"**Valor atual:** R$ {valor_atual:.2f}")
                         nova_data = st.date_input("Nova data de retorno", value=dt_prevista + timedelta(days=3), key=f"prorrog_data_{row['id']}")
-                        valor_adicional = st.number_input("Valor adicional a adicionar (R$)", min_value=0.0, step=10.0, value=0.0, key=f"prorrog_val_{row['id']}", disabled=not usuario_pode_editar_valores)
+                        valor_adicional = st.number_input("Valor adicional a adicionar (R$)", min_value=0.0, step=10.0, value=0.0, key=f"prorrog_val_{row['id']}")
                         obs_prorrog = st.text_input("Motivo da prorrogação (opcional)", key=f"prorrog_obs_{row['id']}", placeholder="Ex: Cliente decidiu ficar mais 3 dias")
                         if st.button("✅ Confirmar Prorrogação", key=f"btn_prorrog_{row['id']}"):
-                            valor_prorrogacao = float(valor_adicional) if usuario_pode_editar_valores else 0.0
-                            ok, msg = db.prorrogar_aluguel(int(row['id']), nova_data.isoformat(), valor_prorrogacao, obs_prorrog if obs_prorrog else None)
+                            ok, msg = db.prorrogar_aluguel(int(row['id']), nova_data.isoformat(), float(valor_adicional), obs_prorrog if obs_prorrog else None)
                             if ok:
                                 st.success(f"✅ {msg}")
                                 st.rerun()
@@ -2051,20 +1974,16 @@ elif st.session_state.page == "Devoluções":
                             mala_acresc_id = dict_malas_acresc[mala_acresc_str]
                             
                             col_ac1, col_ac2 = st.columns(2)
-                            valor_acresc = col_ac1.number_input("Valor da mala extra (R$)", min_value=0.0, step=10.0, key=f"acre_val_{row['id']}", disabled=not usuario_pode_editar_valores)
-                            taxa_acresc = col_ac2.number_input("Taxa de entrega extra (R$)", min_value=0.0, step=5.0, key=f"acre_tax_{row['id']}", disabled=not usuario_pode_editar_valores)
+                            valor_acresc = col_ac1.number_input("Valor da mala extra (R$)", min_value=0.0, step=10.0, key=f"acre_val_{row['id']}")
+                            taxa_acresc = col_ac2.number_input("Taxa de entrega extra (R$)", min_value=0.0, step=5.0, key=f"acre_tax_{row['id']}")
                             
                             acessorios_acresc = st.text_input("Acessórios extras", placeholder="Ex: Cadeado, Capa...", key=f"acre_acess_{row['id']}")
-                            valor_acess_acresc = st.number_input("Valor acessórios extras (R$)", min_value=0.0, step=5.0, key=f"acre_vac_{row['id']}", disabled=not usuario_pode_editar_valores)
+                            valor_acess_acresc = st.number_input("Valor acessórios extras (R$)", min_value=0.0, step=5.0, key=f"acre_vac_{row['id']}")
                             
                             total_acresc = valor_acresc + taxa_acresc + valor_acess_acresc
                             st.markdown(f"**Total desta mala extra:** R$ {total_acresc:.2f}")
                             
                             if st.button("✅ Adicionar Mala Extra", key=f"btn_acre_{row['id']}"):
-                                if not usuario_pode_editar_valores:
-                                    valor_acresc = 0.0
-                                    taxa_acresc = 0.0
-                                    valor_acess_acresc = 0.0
                                 sucesso_acre, msg_acre = db.criar_aluguel(
                                     int(mala_acresc_id),
                                     int(row['cliente_id']),
@@ -2110,7 +2029,7 @@ elif st.session_state.page == "Devoluções":
                              st.error(msg)
 
                     # Botão para Cancelar Aluguel
-                    if usuario_pode_editar_valores and st.button("❌ Cancelar Aluguel", key=f"btn_cancel_{row['id']}", help="Use se o cliente desistiu ou o aluguel foi lançado errado. O valor será removido do financeiro."):
+                    if st.button("❌ Cancelar Aluguel", key=f"btn_cancel_{row['id']}", help="Use se o cliente desistiu ou o aluguel foi lançado errado. O valor será removido do financeiro."):
                          sucesso, msg = db.cancelar_aluguel(int(row['id']))
                          if sucesso:
                              st.success(msg)
@@ -2169,76 +2088,74 @@ elif st.session_state.page == "Devoluções":
             use_container_width=True,
         )
         
-        if usuario_pode_editar_valores:
-            with st.expander("✏️ Alterar Pagamento (Histórico)"):
-                df_opt = df_hist_show.copy()
-                df_opt['cliente_nome'] = df_opt['cliente_nome'].fillna('')
-                df_opt['mala_codigo'] = df_opt['mala_codigo'].fillna('')
-                df_opt['data_retorno_real'] = pd.to_datetime(df_opt['data_retorno_real'], errors='coerce')
+        with st.expander("✏️ Alterar Pagamento (Histórico)"):
+            df_opt = df_hist_show.copy()
+            df_opt['cliente_nome'] = df_opt['cliente_nome'].fillna('')
+            df_opt['mala_codigo'] = df_opt['mala_codigo'].fillna('')
+            df_opt['data_retorno_real'] = pd.to_datetime(df_opt['data_retorno_real'], errors='coerce')
+            
+            opcoes = {}
+            for _, r in df_opt.iterrows():
+                data_dev = r['data_retorno_real'].strftime('%d/%m/%Y') if pd.notna(r['data_retorno_real']) else ''
+                opcoes[f"{int(r['id'])} - {r['mala_codigo']} - {r['cliente_nome']} ({data_dev})"] = int(r['id'])
+            
+            if opcoes:
+                escolha = st.selectbox("Selecione a devolução", list(opcoes.keys()), key="sel_hist_pgto")
+                aluguel_id_sel = opcoes[escolha]
                 
-                opcoes = {}
-                for _, r in df_opt.iterrows():
-                    data_dev = r['data_retorno_real'].strftime('%d/%m/%Y') if pd.notna(r['data_retorno_real']) else ''
-                    opcoes[f"{int(r['id'])} - {r['mala_codigo']} - {r['cliente_nome']} ({data_dev})"] = int(r['id'])
+                linha = df_opt[df_opt['id'] == aluguel_id_sel].iloc[0]
+                st.write(f"Pagamento atual: {linha.get('status_pagamento', '')}")
+                if pd.notna(linha.get('restante')) and float(linha.get('restante')) > 0:
+                    st.write(f"Restante: R$ {float(linha.get('restante')):.2f}")
                 
-                if opcoes:
-                    escolha = st.selectbox("Selecione a devolução", list(opcoes.keys()), key="sel_hist_pgto")
-                    aluguel_id_sel = opcoes[escolha]
-                    
-                    linha = df_opt[df_opt['id'] == aluguel_id_sel].iloc[0]
-                    st.write(f"Pagamento atual: {linha.get('status_pagamento', '')}")
-                    if pd.notna(linha.get('restante')) and float(linha.get('restante')) > 0:
-                        st.write(f"Restante: R$ {float(linha.get('restante')):.2f}")
-                    
-                    col_pg1, col_pg2, col_pg3 = st.columns(3)
-                    if col_pg1.button("Marcar como Pago ✅", key="btn_hist_pago"):
-                        db.update_aluguel_pagamento(aluguel_id_sel, 'Pago')
-                        st.success("Pagamento atualizado para Pago.")
-                        st.rerun()
-                    if col_pg2.button("Marcar como Permuta 🤝", key="btn_hist_permuta"):
-                        db.update_aluguel_pagamento(aluguel_id_sel, 'Permuta')
-                        st.success("Pagamento atualizado para Permuta.")
-                        st.rerun()
-                    if col_pg3.button("Marcar como Pendente ⏳", key="btn_hist_pendente"):
-                        db.update_aluguel_pagamento(aluguel_id_sel, 'Pendente')
-                        st.success("Pagamento atualizado para Pendente.")
-                        st.rerun()
-                else:
-                    st.info("Nenhuma devolução para editar.")
+                col_pg1, col_pg2, col_pg3 = st.columns(3)
+                if col_pg1.button("Marcar como Pago ✅", key="btn_hist_pago"):
+                    db.update_aluguel_pagamento(aluguel_id_sel, 'Pago')
+                    st.success("Pagamento atualizado para Pago.")
+                    st.rerun()
+                if col_pg2.button("Marcar como Permuta 🤝", key="btn_hist_permuta"):
+                    db.update_aluguel_pagamento(aluguel_id_sel, 'Permuta')
+                    st.success("Pagamento atualizado para Permuta.")
+                    st.rerun()
+                if col_pg3.button("Marcar como Pendente ⏳", key="btn_hist_pendente"):
+                    db.update_aluguel_pagamento(aluguel_id_sel, 'Pendente')
+                    st.success("Pagamento atualizado para Pendente.")
+                    st.rerun()
+            else:
+                st.info("Nenhuma devolução para editar.")
 
-        if usuario_pode_editar_valores:
-            with st.expander("🔄 Restaurar Devolução / Quebra"):
-                st.warning("⚠️ Use esta função apenas se precisa corrigir um registro feito por engano.")
-                df_r = df_hist_show.copy()
-                df_r['cliente_nome'] = df_r['cliente_nome'].fillna('')
-                df_r['mala_codigo'] = df_r['mala_codigo'].fillna('')
-                df_r['data_retorno_real'] = pd.to_datetime(df_r['data_retorno_real'], errors='coerce')
+        with st.expander("🔄 Restaurar Devolução / Quebra"):
+            st.warning("⚠️ Use esta função apenas se precisa corrigir um registro feito por engano.")
+            df_r = df_hist_show.copy()
+            df_r['cliente_nome'] = df_r['cliente_nome'].fillna('')
+            df_r['mala_codigo'] = df_r['mala_codigo'].fillna('')
+            df_r['data_retorno_real'] = pd.to_datetime(df_r['data_retorno_real'], errors='coerce')
+            
+            opcoes_r = {}
+            for _, r in df_r.iterrows():
+                data_dev = r['data_retorno_real'].strftime('%d/%m/%Y') if pd.notna(r['data_retorno_real']) else ''
+                avaria_txt = f" [AVARIA R$ {float(r['valor_avaria']):.2f}]" if pd.notna(r.get('valor_avaria')) and float(r.get('valor_avaria', 0)) > 0 else ""
+                opcoes_r[f"{int(r['id'])} - {r['mala_codigo']} - {r['cliente_nome']} ({data_dev}){avaria_txt}"] = int(r['id'])
+            
+            if opcoes_r:
+                escolha_r = st.selectbox("Selecione a devolução para restaurar", list(opcoes_r.keys()), key="sel_hist_rest")
+                aluguel_id_r = opcoes_r[escolha_r]
                 
-                opcoes_r = {}
-                for _, r in df_r.iterrows():
-                    data_dev = r['data_retorno_real'].strftime('%d/%m/%Y') if pd.notna(r['data_retorno_real']) else ''
-                    avaria_txt = f" [AVARIA R$ {float(r['valor_avaria']):.2f}]" if pd.notna(r.get('valor_avaria')) and float(r.get('valor_avaria', 0)) > 0 else ""
-                    opcoes_r[f"{int(r['id'])} - {r['mala_codigo']} - {r['cliente_nome']} ({data_dev}){avaria_txt}"] = int(r['id'])
+                linha_r = df_r[df_r['id'] == aluguel_id_r].iloc[0]
                 
-                if opcoes_r:
-                    escolha_r = st.selectbox("Selecione a devolução para restaurar", list(opcoes_r.keys()), key="sel_hist_rest")
-                    aluguel_id_r = opcoes_r[escolha_r]
-                    
-                    linha_r = df_r[df_r['id'] == aluguel_id_r].iloc[0]
-                    
-                    st.write(f"**Mala:** {linha_r.get('mala_codigo', 'N/A')}")
-                    st.write(f"**Cliente:** {linha_r.get('cliente_nome', 'N/A')}")
-                    st.write(f"**Valor Avaria:** R$ {float(linha_r.get('valor_avaria', 0) or 0):.2f}")
-                    
-                    if st.button("🔄 Restaurar (Voltar para Aluguel Ativo)", key="btn_restaurar_dev"):
-                        ok, msg = db.restaurar_aluguel_finalizado(aluguel_id_r)
-                        if ok:
-                            st.success(f"Aluguel restaurado! {msg}")
-                            st.rerun()
-                        else:
-                            st.error(f"Erro: {msg}")
-                else:
-                    st.info("Nenhuma devolução para restaurar.")
+                st.write(f"**Mala:** {linha_r.get('mala_codigo', 'N/A')}")
+                st.write(f"**Cliente:** {linha_r.get('cliente_nome', 'N/A')}")
+                st.write(f"**Valor Avaria:** R$ {float(linha_r.get('valor_avaria', 0) or 0):.2f}")
+                
+                if st.button("🔄 Restaurar (Voltar para Aluguel Ativo)", key="btn_restaurar_dev"):
+                    ok, msg = db.restaurar_aluguel_finalizado(aluguel_id_r)
+                    if ok:
+                        st.success(f"Aluguel restaurado! {msg}")
+                        st.rerun()
+                    else:
+                        st.error(f"Erro: {msg}")
+            else:
+                st.info("Nenhuma devolução para restaurar.")
 
 # --- CALENDÁRIO ---
 elif st.session_state.page == "Calendário de Reservas":
