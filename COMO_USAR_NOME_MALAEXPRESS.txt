@@ -1,0 +1,8 @@
+INSTRUCOES PARA USAR O NOME "MALAEXPRESS" NO NAVEGADOR:
+
+1. Execute o arquivo "CONFIGURAR_NOME_MALAEXPRESS.bat" como Administrador (clique com o botão direito -> Executar como Administrador).
+2. Confirme a permissão do Windows.
+3. Inicie o sistema normalmente pelo "INICIAR_SISTEMA.bat".
+4. No navegador, você poderá digitar: http://malaexpress:8501
+
+Se preferir, continue usando http://localhost:8501, ambos funcionarão.

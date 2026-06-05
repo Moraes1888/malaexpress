@@ -1,0 +1,8 @@
+venv/
+.venv/
+__pycache__/
+*.pyc
+.streamlit/secrets.toml
+.streamlit/config.toml
+backups/
+mala_express_restored.db

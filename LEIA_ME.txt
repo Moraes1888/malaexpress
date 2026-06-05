@@ -1,0 +1,21 @@
+# MalaExpress - Sistema de Controle de Aluguel de Malas 🧳
+
+## 🚀 Como Iniciar o Sistema
+1. Na pasta do projeto, localize o arquivo `INICIAR_SISTEMA.bat`.
+2. Clique duas vezes nele.
+3. O sistema abrirá automaticamente no seu navegador.
+4. **Para criar um atalho na Área de Trabalho**: Clique com o botão direito em `INICIAR_SISTEMA.bat` -> Enviar para -> Área de Trabalho (criar atalho).
+
+## 📱 Acesso pelo Celular (Wi-Fi e Internet)
+1. Com o sistema aberto no PC, vá no menu lateral e clique em **"📱 Acesso Mobile"**.
+2. **Opção 1 (Internet - Recomendado)**: Use o QR Code principal ou o link "Mundial" para acessar de qualquer lugar (4G/5G).
+3. **Opção 2 (Wi-Fi Local)**: Se a internet falhar, use a opção "Wi-Fi Local" (precisa estar na mesma rede).
+
+## 💾 Backup dos Dados
+Seus dados estão seguros no arquivo `mala_express.db`.
+- **Para fazer backup**: Basta copiar esse arquivo e salvar em outro lugar (pen drive, nuvem, etc).
+- **As fotos das malas** ficam na pasta `imagens_malas`. Copie essa pasta também para garantir o backup completo.
+
+## 🛠️ Suporte
+Se o sistema não abrir, tente executar o arquivo `INICIAR_SISTEMA.bat` novamente.
+Se o acesso remoto (Ngrok) não funcionar, verifique se você tem internet no computador.
