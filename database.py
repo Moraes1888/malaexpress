@@ -533,9 +533,12 @@ def add_cliente(nome, documento, cep, endereco="", cidade="", telefone=""):
                   (nome, documento, cep, endereco, cidade, telefone))
         conn.commit()
         return True, None
-    except sqlite3.IntegrityError:
+    except IntegrityError:
         conn.rollback()
         return False, "Cliente já cadastrado com este documento."
+    except Exception as e:
+        conn.rollback()
+        return False, str(e)
     finally:
         conn.close()
 

@@ -1385,10 +1385,14 @@ elif st.session_state.page == "Cadastrar Cliente":
                     with col_info:
                         st.info("Caso contrário, apenas mude o documento do novo cliente.")
                 else:
-                    db.add_cliente(nome, documento, cep, endereco, cidade, telefone)
-                    st.success(f"Cliente {nome} cadastrado com sucesso!")
-                    st.session_state.form_cliente_key += 1
-                    st.rerun()
+                    sucesso, erro_add = db.add_cliente(nome, documento, cep, endereco, cidade, telefone)
+                    if sucesso:
+                        invalidate_cache()
+                        st.success(f"Cliente {nome} cadastrado com sucesso!")
+                        st.session_state.form_cliente_key += 1
+                        st.rerun()
+                    else:
+                        st.error(f"❌ Não foi possível cadastrar: {erro_add}")
             else:
                 st.warning("Nome é obrigatório.")
                 
