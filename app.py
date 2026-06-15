@@ -1003,8 +1003,8 @@ elif st.session_state.page == "Cadastrar Mala":
     malas_cadastradas = db.get_malas()
     
     if not malas_cadastradas.empty:
-        # Criar tabs para separar Excluir e Editar
-        tab_editar, tab_excluir = st.tabs(["✏️ Editar Mala", "🗑️ Excluir Mala"])
+        # Criar tabs para separar Excluir, Editar e Vender
+        tab_editar, tab_vender_mala, tab_excluir = st.tabs(["✏️ Editar Mala", "🛒 Vender Mala", "🗑️ Excluir Mala"])
         
         with tab_editar:
             opcoes_mala = malas_cadastradas.apply(lambda x: f"{x['codigo']} - {x['marca']} - {x['tamanho']} ({x['cor']})", axis=1)
@@ -1166,6 +1166,109 @@ elif st.session_state.page == "Cadastrar Mala":
                         st.rerun()
                     else:
                         st.error(msg)
+
+        with tab_vender_mala:
+            st.write("Selecione uma mala cadastrada para registrar como **vendida**. "
+                     "A mala será marcada como 'Vendida' e sumirá do estoque disponível para aluguel.")
+            st.info("💡 Dica: Use esta aba quando a mala já está cadastrada. Para mala avulsa, use a aba '🛒 Vender Mala' do menu lateral.")
+
+            malas_vendaveis = malas_cadastradas[malas_cadastradas["status"].isin(["Disponível", "Quebrada"])]
+
+            if malas_vendaveis.empty:
+                st.warning("Nenhuma mala disponível para venda no cadastro (todas estão Alugadas, Vendidas ou Quebrada).")
+            else:
+                opcoes_v = malas_vendaveis.apply(
+                    lambda x: f"{x['codigo']} - {x['marca']} - {x['tamanho']} ({x['cor']})", axis=1
+                )
+                mala_vender_str = st.selectbox(
+                    "Selecione a Mala para Vender",
+                    options=opcoes_v,
+                    key="sel_vender_mala_cad",
+                )
+                row_v = malas_vendaveis[opcoes_v == mala_vender_str].iloc[0]
+                custo_aquisicao_v = float(row_v.get("valor_pago") or 0)
+
+                with st.form("form_vender_mala_cad"):
+                    col_v1, col_v2 = st.columns(2)
+                    with col_v1:
+                        tipo_mala_v = st.selectbox("Tipo", ["Nova", "Usada"], key="venda_cad_tipo")
+                        valor_venda_v = st.number_input(
+                            "Valor de venda (R$)",
+                            min_value=0.0,
+                            step=50.0,
+                            value=0.0,
+                            key="venda_cad_valor",
+                        )
+                        forma_pagamento_v = st.selectbox(
+                            "Forma de pagamento",
+                            ["Dinheiro", "PIX", "Cartão de Crédito", "Cartão de Débito", "Boleto", "Transferência", "Outro"],
+                            key="venda_cad_pagamento",
+                        )
+                    with col_v2:
+                        data_venda_v = st.date_input("Data da venda", value=datetime.now().date(), key="venda_cad_data")
+                        try:
+                            df_clientes_v = db.get_clientes_cached()
+                        except Exception:
+                            df_clientes_v = pd.DataFrame()
+                        if df_clientes_v is None or df_clientes_v.empty:
+                            st.warning("Sem cliente cadastrado. Use 'Cliente avulso' abaixo.")
+                            cliente_id_v = None
+                            cliente_nome_v = st.text_input("Nome do cliente (avulso)", key="venda_cad_cliente_nome")
+                        else:
+                            cliente_tipo_v = st.radio(
+                                "Cliente",
+                                ["Cadastrado", "Avulso"],
+                                horizontal=True,
+                                key="venda_cad_cliente_tipo",
+                            )
+                            if cliente_tipo_v == "Cadastrado":
+                                opcoes_c = [f"{c['nome']} (id {c['id']})" for _, c in df_clientes_v.iterrows()]
+                                sel_c = st.selectbox("Selecione o cliente", opcoes_c, key="venda_cad_cliente_sel")
+                                if sel_c:
+                                    cid_v = int(sel_c.split("id ")[-1].rstrip(")"))
+                                    linha_c = df_clientes_v[df_clientes_v["id"] == cid_v]
+                                    if not linha_c.empty:
+                                        cliente_id_v = int(linha_c.iloc[0]["id"])
+                                        cliente_nome_v = str(linha_c.iloc[0]["nome"])
+                                    else:
+                                        cliente_id_v = None
+                                        cliente_nome_v = ""
+                                else:
+                                    cliente_id_v = None
+                                    cliente_nome_v = ""
+                            else:
+                                cliente_id_v = None
+                                cliente_nome_v = st.text_input("Nome do cliente (avulso)", key="venda_cad_cliente_nome_avulso")
+
+                    observacao_v = st.text_area("Observação", height=80, key="venda_cad_obs")
+                    submitted_v = st.form_submit_button("💾 Registrar Venda desta Mala", use_container_width=True)
+
+                    if submitted_v:
+                        if valor_venda_v <= 0:
+                            st.error("Informe um valor de venda maior que zero.")
+                        elif not cliente_nome_v or not str(cliente_nome_v).strip():
+                            st.error("Informe o nome do cliente (cadastrado ou avulso).")
+                        else:
+                            ok_v, err_v = db.add_venda_mala(
+                                mala_id=int(row_v["id"]),
+                                mala_codigo=str(row_v["codigo"]),
+                                mala_tamanho=str(row_v["tamanho"]),
+                                cliente_id=cliente_id_v,
+                                cliente_nome=str(cliente_nome_v).strip(),
+                                valor_venda=float(valor_venda_v),
+                                custo_aquisicao=custo_aquisicao_v,
+                                tipo_mala=tipo_mala_v,
+                                forma_pagamento=forma_pagamento_v,
+                                observacao=str(observacao_v or "").strip(),
+                                data_venda=data_venda_v.isoformat(),
+                            )
+                            if ok_v:
+                                invalidate_cache()
+                                st.success(f"✅ Mala {row_v['codigo']} marcada como Vendida para {cliente_nome_v}.")
+                                st.balloons()
+                                st.rerun()
+                            else:
+                                st.error(f"❌ Erro ao registrar venda: {err_v}")
 
         with tab_excluir:
             st.write("Selecione uma mala para excluir do sistema:")
