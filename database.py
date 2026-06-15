@@ -10,7 +10,7 @@ DATA_DIR = os.getenv("MALAEXPRESS_DATA_DIR", BASE_DIR)
 DB_NAME = os.getenv("MALAEXPRESS_DB_PATH", os.path.join(DATA_DIR, "mala_express.db"))
 BACKUP_DIR = os.getenv("MALAEXPRESS_BACKUP_DIR", os.path.join(DATA_DIR, "backups"))
 BUNDLED_DB_PATH = os.path.join(BASE_DIR, "mala_express.db")
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 def ensure_data_storage():
     os.makedirs(os.path.dirname(DB_NAME), exist_ok=True)
@@ -268,6 +268,28 @@ def init_db():
             "INSERT OR IGNORE INTO usuarios (username, nome, password_hash, perfil, ativo) VALUES (?, ?, ?, ?, 1)",
             ("socio", "Socio", hashlib.sha256("socio123".encode("utf-8")).hexdigest(), "socio")
         )
+
+    if versao_atual < 3:
+        # Tabela de Vendas de Malas (separada do faturamento de alugueis)
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS vendas_malas (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                mala_id INTEGER,
+                mala_codigo TEXT,
+                mala_tamanho TEXT,
+                cliente_id INTEGER,
+                cliente_nome TEXT,
+                data_venda DATE,
+                valor_venda REAL,
+                custo_aquisicao REAL,
+                tipo_mala TEXT,
+                forma_pagamento TEXT,
+                observacao TEXT,
+                FOREIGN KEY (mala_id) REFERENCES malas (id),
+                FOREIGN KEY (cliente_id) REFERENCES clientes (id)
+            )
+        ''')
+        c.execute("CREATE INDEX IF NOT EXISTS idx_vendas_data ON vendas_malas(data_venda)")
 
     # Atualizar versão do schema
     c.execute("INSERT OR REPLACE INTO schema_version (versao, data_atualizacao) VALUES (?, CURRENT_DATE)", (SCHEMA_VERSION,))
@@ -1666,6 +1688,96 @@ def get_fretes_por_periodo(data_inicio=None, data_fim=None):
     
     conn.close()
     return df
+
+# --- Funções para Vendas de Malas ---
+def add_venda_mala(mala_id, mala_codigo, mala_tamanho, cliente_id, cliente_nome, valor_venda, custo_aquisicao, tipo_mala, forma_pagamento, observacao, data_venda):
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    try:
+        c.execute('''
+            INSERT INTO vendas_malas (mala_id, mala_codigo, mala_tamanho, cliente_id, cliente_nome, data_venda, valor_venda, custo_aquisicao, tipo_mala, forma_pagamento, observacao)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (
+            mala_id, mala_codigo, mala_tamanho, cliente_id, cliente_nome,
+            data_venda, valor_venda, custo_aquisicao, tipo_mala, forma_pagamento, observacao
+        ))
+        # Ao vender, a mala deixa de ficar disponivel para aluguel
+        if mala_id:
+            c.execute("UPDATE malas SET status = 'Vendida' WHERE id = ?", (mala_id,))
+        conn.commit()
+        return True, None
+    except Exception as e:
+        conn.rollback()
+        return False, str(e)
+    finally:
+        conn.close()
+
+def get_vendas_malas(data_inicio=None, data_fim=None):
+    conn = sqlite3.connect(DB_NAME)
+    if data_inicio and data_fim:
+        query = "SELECT * FROM vendas_malas WHERE data_venda >= ? AND data_venda <= ? ORDER BY data_venda DESC, id DESC"
+        df = pd.read_sql(query, conn, params=(data_inicio, data_fim))
+    else:
+        query = "SELECT * FROM vendas_malas ORDER BY data_venda DESC, id DESC"
+        df = pd.read_sql(query, conn)
+    conn.close()
+    return df
+
+def get_resumo_vendas():
+    """Retorna totais agregados das vendas (valor, custo, lucro, quantidade)."""
+    conn = sqlite3.connect(DB_NAME)
+    df = pd.read_sql('''
+        SELECT
+            COALESCE(SUM(valor_venda), 0) as total_vendido,
+            COALESCE(SUM(custo_aquisicao), 0) as total_custo,
+            COALESCE(SUM(valor_venda - custo_aquisicao), 0) as total_lucro,
+            COUNT(*) as total_vendas
+        FROM vendas_malas
+    ''', conn)
+    conn.close()
+    if df.empty:
+        return {"total_vendido": 0.0, "total_custo": 0.0, "total_lucro": 0.0, "total_vendas": 0}
+    row = df.iloc[0]
+    return {
+        "total_vendido": float(row["total_vendido"] or 0),
+        "total_custo": float(row["total_custo"] or 0),
+        "total_lucro": float(row["total_lucro"] or 0),
+        "total_vendas": int(row["total_vendas"] or 0),
+    }
+
+def get_vendas_mensal():
+    """Faturamento mensal com vendas (separado do faturamento de alugueis)."""
+    conn = sqlite3.connect(DB_NAME)
+    df = pd.read_sql('''
+        SELECT strftime('%Y-%m', data_venda) as mes_ano,
+               COALESCE(SUM(valor_venda), 0) as total_vendas,
+               COALESCE(SUM(valor_venda - custo_aquisicao), 0) as total_lucro,
+               COUNT(*) as qtd_vendas
+        FROM vendas_malas
+        GROUP BY mes_ano
+        ORDER BY mes_ano
+    ''', conn)
+    conn.close()
+    return df
+
+def delete_venda_mala(venda_id):
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    try:
+        c.execute("SELECT mala_id FROM vendas_malas WHERE id = ?", (venda_id,))
+        row = c.fetchone()
+        mala_id = row[0] if row else None
+        c.execute("DELETE FROM vendas_malas WHERE id = ?", (venda_id,))
+        # Reverter status da mala se ela existir
+        if mala_id:
+            c.execute("UPDATE malas SET status = 'Disponível' WHERE id = ? AND status = 'Vendida'", (mala_id,))
+        conn.commit()
+        return True, None
+    except Exception as e:
+        conn.rollback()
+        return False, str(e)
+    finally:
+        conn.close()
 
 def backup_db(max_backup=10):
     """Cria backup do banco de dados com timestamp. Mantém os últimos max_backup backups."""

@@ -682,7 +682,7 @@ if is_external and is_mobile and st.session_state.page == "Dashboard":
 
 # Navegação Lateral
 menu_restrito = ["Novo Aluguel"]
-menu_completo = ["Dashboard", "Cadastrar Mala", "Cadastrar Cliente", "Novo Aluguel", "Devoluções", "Calendário de Reservas", "Análise Financeira", "Contrato de Aluguel", "🚚 Calculadora de Frete", "📱 Acesso Mobile"]
+menu_completo = ["Dashboard", "Cadastrar Mala", "Cadastrar Cliente", "Novo Aluguel", "Devoluções", "Calendário de Reservas", "Análise Financeira", "Contrato de Aluguel", "🛒 Vender Mala", "🚚 Calculadora de Frete", "📱 Acesso Mobile"]
 
 # Se acesso externo + mobile, mostra só o menu restrito
 menu = menu_restrito if (is_external and is_mobile) else menu_completo
@@ -2454,7 +2454,7 @@ elif st.session_state.page == "Análise Financeira":
     st.subheader("Análise Financeira e Controle de Gastos")
     
     # Criar abas para separar Análise de ROI e Controle de Gastos Extras
-    tab_geral, tab_analise, tab_gastos = st.tabs(["� Balanço Geral do Negócio", "�📊 Análise de Aluguéis & ROI", "💸 Controle de Gastos Extras"])
+    tab_geral, tab_analise, tab_gastos, tab_vendas = st.tabs(["💼 Balanço Geral do Negócio", "📊 Análise de Aluguéis & ROI", "💸 Controle de Gastos Extras", "🛒 Vendas de Malas"])
     
     with tab_geral:
         st.subheader("💰 Visão Macro do Negócio")
@@ -3584,6 +3584,91 @@ elif st.session_state.page == "Análise Financeira":
         else:
             st.info("Nenhum gasto extra registrado.")
 
+    with tab_vendas:
+        st.subheader("🛒 Vendas de Malas (Novas e Usadas)")
+        st.success(
+            "✅ **Bloco informativo e separado:** O resultado de vendas de malas **NÃO entra no Saldo em Caixa** "
+            "da aba 'Balanço Geral do Negócio'. O Saldo em Caixa continua considerando apenas **aluguéis - "
+            "gastos extras - reinvestimentos do caixa**. Aqui você acompanha o desempenho de vendas em um "
+            "lugar próprio, sem misturar com a operação de locação."
+        )
+
+        resumo_vendas = db.get_resumo_vendas()
+        total_vendido = float(resumo_vendas.get("total_vendido", 0) or 0)
+        total_custo = float(resumo_vendas.get("total_custo", 0) or 0)
+        total_lucro = float(resumo_vendas.get("total_lucro", 0) or 0)
+        total_vendas = int(resumo_vendas.get("total_vendas", 0) or 0)
+
+        col_v1, col_v2, col_v3, col_v4 = st.columns(4)
+        col_v1.metric("📦 Vendas Registradas", f"{total_vendas}", help="Quantidade total de malas vendidas (novas + usadas).")
+        col_v2.metric("💰 Faturado em Vendas", f"R$ {total_vendido:,.2f}", help="Soma do valor de venda de todas as malas vendidas.")
+        col_v3.metric("💵 Custo de Aquisição", f"R$ {total_custo:,.2f}", help="Soma do custo de aquisição das malas vendidas.")
+        col_v4.metric("📈 Lucro de Vendas", f"R$ {total_lucro:,.2f}", help="Faturado - Custo de aquisição (somente vendas, sem misturar com o caixa).")
+
+        margem_lucro = (total_lucro / total_vendido * 100) if total_vendido > 0 else 0.0
+        st.write(
+            f"📊 **Margem de Lucro nas Vendas:** **{margem_lucro:.1f}%** "
+            f"(somente vendas - independente do Saldo em Caixa da locação)."
+        )
+        st.progress(min(max(margem_lucro / 100, 0.0), 1.0))
+
+        st.divider()
+
+        st.markdown("### 📈 Faturamento Mensal de Vendas")
+        df_vendas_mensal = db.get_vendas_mensal()
+        if not df_vendas_mensal.empty:
+            df_vendas_mensal["mes_formatado"] = pd.to_datetime(df_vendas_mensal["mes_ano"]).dt.strftime("%b/%y")
+            fig_vendas = px.bar(
+                df_vendas_mensal,
+                x="mes_formatado",
+                y=["total_vendas", "total_lucro"],
+                barmode="group",
+                title="Vendas por mês (Faturado e Lucro)",
+                labels={"value": "R$", "mes_formatado": "Mês", "variable": "Indicador"},
+                color_discrete_map={"total_vendas": "#1E90FF", "total_lucro": "#28a745"},
+            )
+            fig_vendas.update_traces(texttemplate="R$ %{y:,.2f}", textposition="outside")
+            fig_vendas.update_layout(height=400, hovermode="x unified")
+            st.plotly_chart(fig_vendas, use_container_width=True)
+        else:
+            st.info("Nenhuma venda registrada até o momento. Cadastre uma venda na aba '🛒 Vender Mala'.")
+
+        st.divider()
+
+        st.markdown("### 📋 Vendas Recentes")
+        df_vendas_rec = db.get_vendas_malas()
+        if df_vendas_rec is None or df_vendas_rec.empty:
+            st.info("Nenhuma venda cadastrada. Use a aba '🛒 Vender Mala' para registrar a primeira venda.")
+        else:
+            df_vendas_exib = df_vendas_rec[[
+                "data_venda", "mala_codigo", "mala_tamanho", "tipo_mala",
+                "cliente_nome", "valor_venda", "custo_aquisicao",
+                "forma_pagamento", "observacao"
+            ]].copy()
+            df_vendas_exib["lucro"] = df_vendas_exib["valor_venda"] - df_vendas_exib["custo_aquisicao"]
+            df_vendas_exib.columns = [
+                "Data", "Mala", "Tamanho", "Tipo", "Cliente",
+                "Valor Venda (R$)", "Custo (R$)", "Pagamento", "Observação", "Lucro (R$)"
+            ]
+            df_vendas_exib["Data"] = pd.to_datetime(df_vendas_exib["Data"]).dt.strftime("%d/%m/%Y")
+            st.dataframe(
+                df_vendas_exib.style.format({
+                    "Valor Venda (R$)": "R$ {:,.2f}",
+                    "Custo (R$)": "R$ {:,.2f}",
+                    "Lucro (R$)": "R$ {:,.2f}",
+                }),
+                use_container_width=True,
+                hide_index=True,
+            )
+
+        st.divider()
+        st.info(
+            "ℹ️ **Lembrete:** O resultado desta aba é **meramente informativo**. "
+            "O **Saldo em Caixa** exibido no 'Balanço Geral do Negócio' continua sendo "
+            "**Faturamento de Aluguéis - Saídas do Caixa (Gastos Extras + Reinvestimentos)**. "
+            "Vendas não impactam esse saldo."
+        )
+
 # --- CONTRATO DE ALUGUEL ---
 elif st.session_state.page == "Contrato de Aluguel":
     st.subheader("Gerar Contrato de Locação")
@@ -3859,6 +3944,195 @@ elif st.session_state.page == "📱 Acesso Mobile":
     st.write("1. Verifique se o arquivo `INICIAR_SISTEMA` está na sua Área de Trabalho.")
     st.write("2. Se não estiver, vá até a pasta do projeto e crie um atalho (Botão direito -> Enviar para -> Área de Trabalho).")
     st.write("3. Basta clicar duas vezes nesse ícone sempre que quiser usar o sistema.")
+
+# --- VENDER MALA ---
+elif st.session_state.page == "🛒 Vender Mala":
+    st.subheader("🛒 Venda de Malas (Novas e Usadas)")
+
+    st.info(
+        "💡 As vendas são registradas em um bloco separado do Saldo em Caixa da locação. "
+        "O caixa da locação continua mostrando apenas aluguéis, gastos extras e reinvestimentos do caixa."
+    )
+
+    tab_nova, tab_consulta = st.tabs(["➕ Registrar Venda", "📋 Histórico de Vendas"])
+
+    with tab_nova:
+        st.markdown("### Registrar nova venda")
+        with st.form("form_venda_mala", clear_on_submit=True):
+            col_a, col_b = st.columns(2)
+
+            with col_a:
+                tipo_mala = st.selectbox("Tipo da Mala", ["Nova", "Usada"], key="venda_tipo")
+                mala_opcao = st.radio(
+                    "Mala do estoque?",
+                    ["Usar mala do cadastro", "Mala avulsa (sem cadastro)"],
+                    horizontal=True,
+                    key="venda_origem",
+                )
+
+                mala_id = None
+                mala_codigo = ""
+                mala_tamanho = ""
+                custo_aquisicao = 0.0
+
+                if mala_opcao == "Usar mala do cadastro":
+                    try:
+                        df_malas = db.get_malas()
+                    except Exception:
+                        df_malas = pd.DataFrame()
+                    df_disponiveis = df_malas[df_malas["status"].isin(["Disponível", "Quebrada"])] if not df_malas.empty else df_malas
+                    if df_disponiveis.empty:
+                        st.warning("Nenhuma mala disponível para venda no cadastro. Cadastre uma mala ou use a opção 'Mala avulsa'.")
+                        mala_escolhida = None
+                    else:
+                        opcoes = [f"{row['codigo']} - {row['tamanho']}" for _, row in df_disponiveis.iterrows()]
+                        mala_escolhida = st.selectbox("Mala", opcoes, key="venda_mala_select")
+                        if mala_escolhida:
+                            codigo = mala_escolhida.split(" - ")[0]
+                            linha = df_disponiveis[df_disponiveis["codigo"] == codigo]
+                            if not linha.empty:
+                                row = linha.iloc[0]
+                                mala_id = int(row["id"])
+                                mala_codigo = str(row["codigo"])
+                                mala_tamanho = str(row["tamanho"])
+                                custo_aquisicao = float(row.get("valor_pago") or 0)
+                else:
+                    mala_codigo = st.text_input("Código / referência da mala", key="venda_mala_codigo")
+                    mala_tamanho = st.text_input("Tamanho (ex: P, M, G)", key="venda_mala_tamanho")
+                    custo_aquisicao = st.number_input(
+                        "Custo de aquisição (R$)",
+                        min_value=0.0,
+                        step=10.0,
+                        value=0.0,
+                        key="venda_mala_custo",
+                    )
+
+                valor_venda = st.number_input(
+                    "Valor de venda (R$)",
+                    min_value=0.0,
+                    step=50.0,
+                    value=0.0,
+                    key="venda_valor",
+                )
+                forma_pagamento = st.selectbox(
+                    "Forma de pagamento",
+                    ["Dinheiro", "PIX", "Cartão de Crédito", "Cartão de Débito", "Boleto", "Transferência", "Outro"],
+                    key="venda_pagamento",
+                )
+
+            with col_b:
+                data_venda = st.date_input("Data da venda", value=datetime.now().date(), key="venda_data")
+                try:
+                    df_clientes = db.get_clientes_cached()
+                except Exception:
+                    df_clientes = pd.DataFrame()
+                if df_clientes is None or df_clientes.empty:
+                    st.warning("Sem cliente cadastrado. Use 'Cliente avulso' abaixo.")
+                    cliente_id = None
+                    cliente_nome = st.text_input("Nome do cliente (avulso)", key="venda_cliente_nome")
+                else:
+                    cliente_opcao = st.radio(
+                        "Cliente",
+                        ["Cadastrado", "Avulso"],
+                        horizontal=True,
+                        key="venda_cliente_tipo",
+                    )
+                    if cliente_opcao == "Cadastrado":
+                        opcoes_clientes = [f"{row['nome']} (id {row['id']})" for _, row in df_clientes.iterrows()]
+                        cliente_sel = st.selectbox("Selecione o cliente", opcoes_clientes, key="venda_cliente_sel")
+                        if cliente_sel:
+                            cid = int(cliente_sel.split("id ")[-1].rstrip(")"))
+                            linha = df_clientes[df_clientes["id"] == cid]
+                            if not linha.empty:
+                                cliente_id = int(linha.iloc[0]["id"])
+                                cliente_nome = str(linha.iloc[0]["nome"])
+                    else:
+                        cliente_id = None
+                        cliente_nome = st.text_input("Nome do cliente (avulso)", key="venda_cliente_nome_avulso")
+
+                observacao = st.text_area("Observação", height=80, key="venda_obs")
+
+            submitted = st.form_submit_button("💾 Registrar Venda", use_container_width=True)
+
+            if submitted:
+                if valor_venda <= 0:
+                    st.error("Informe um valor de venda maior que zero.")
+                elif not cliente_nome or not str(cliente_nome).strip():
+                    st.error("Informe o nome do cliente (cadastrado ou avulso).")
+                else:
+                    sucesso, erro_venda = db.add_venda_mala(
+                        mala_id=mala_id,
+                        mala_codigo=str(mala_codigo or "").strip(),
+                        mala_tamanho=str(mala_tamanho or "").strip(),
+                        cliente_id=cliente_id,
+                        cliente_nome=str(cliente_nome).strip(),
+                        valor_venda=float(valor_venda),
+                        custo_aquisicao=float(custo_aquisicao or 0),
+                        tipo_mala=tipo_mala,
+                        forma_pagamento=forma_pagamento,
+                        observacao=str(observacao or "").strip(),
+                        data_venda=data_venda.isoformat(),
+                    )
+                    if sucesso:
+                        invalidate_cache()
+                        st.success(f"✅ Venda registrada para {cliente_nome}.")
+                        st.balloons()
+                        st.rerun()
+                    else:
+                        st.error(f"❌ Erro ao registrar venda: {erro_venda}")
+
+    with tab_consulta:
+        st.markdown("### Histórico de Vendas")
+        colf1, colf2 = st.columns(2)
+        with colf1:
+            filtro_inicio = st.date_input("De", value=datetime.now().date() - pd.Timedelta(days=90), key="venda_filtro_ini")
+        with colf2:
+            filtro_fim = st.date_input("Até", value=datetime.now().date(), key="venda_filtro_fim")
+
+        df_vendas = db.get_vendas_malas(filtro_inicio.isoformat(), filtro_fim.isoformat())
+
+        if df_vendas is None or df_vendas.empty:
+            st.info("Nenhuma venda registrada no período selecionado.")
+        else:
+            resumo = db.get_resumo_vendas()
+            cm1, cm2, cm3, cm4 = st.columns(4)
+            cm1.metric("Vendas no período", f"{len(df_vendas)}")
+            cm2.metric("Faturado (período)", f"R$ {df_vendas['valor_venda'].sum():,.2f}")
+            cm3.metric("Custo de aquisição", f"R$ {df_vendas['custo_aquisicao'].sum():,.2f}")
+            cm4.metric("Lucro (período)", f"R$ {(df_vendas['valor_venda'].sum() - df_vendas['custo_aquisicao'].sum()):,.2f}")
+
+            st.markdown("#### Acumulado geral de vendas")
+            ga1, ga2, ga3, ga4 = st.columns(4)
+            ga1.metric("Total de vendas", f"{resumo['total_vendas']}")
+            ga2.metric("Faturado total", f"R$ {resumo['total_vendido']:,.2f}")
+            ga3.metric("Custo total", f"R$ {resumo['total_custo']:,.2f}")
+            ga4.metric("Lucro total", f"R$ {resumo['total_lucro']:,.2f}")
+
+            df_exibir = df_vendas[[
+                "data_venda", "mala_codigo", "mala_tamanho", "tipo_mala",
+                "cliente_nome", "valor_venda", "custo_aquisicao",
+                "forma_pagamento", "observacao"
+            ]].copy()
+            df_exibir["lucro"] = df_exibir["valor_venda"] - df_exibir["custo_aquisicao"]
+            st.dataframe(df_exibir, use_container_width=True, hide_index=True)
+
+            st.markdown("#### Excluir venda (reverte mala para Disponível)")
+            id_excluir = st.number_input(
+                "ID da venda para excluir",
+                min_value=0,
+                step=1,
+                value=0,
+                key="venda_excluir_id",
+            )
+            if st.button("Excluir venda selecionada", key="venda_btn_excluir"):
+                if id_excluir > 0:
+                    ok_del, erro_del = db.delete_venda_mala(int(id_excluir))
+                    if ok_del:
+                        invalidate_cache()
+                        st.success(f"Venda {id_excluir} removida.")
+                        st.rerun()
+                    else:
+                        st.error(f"Erro: {erro_del}")
 
 # --- CALCULADORA DE FRETE ---
 elif st.session_state.page == "🚚 Calculadora de Frete":
