@@ -883,7 +883,7 @@ elif st.session_state.page == "Cadastrar Mala":
     if not df_gestores.empty:
         opcoes_gestores = {row['nome']: row['id'] for _, row in df_gestores.iterrows()}
         
-    with st.form("form_mala"):
+    with st.form("form_mala", clear_on_submit=True):
         col1, col2 = st.columns(2)
         # codigo = col1.text_input("Código da Mala (Ex: M001)") # Removido
         
@@ -992,15 +992,8 @@ elif st.session_state.page == "Cadastrar Mala":
                     st.success(f"Mala {codigo_final} cadastrada com sucesso!")
                     if imagem_path:
                         st.info("Imagem salva com sucesso!")
-                    
-                    # Limpar campos manualmente após sucesso
-                    st.session_state['cad_marca'] = ""
-                    st.session_state['cad_cor'] = ""
-                    st.session_state['cad_valor'] = 0.0
-                    
-                    st.session_state['cad_imagem'] = None # Tentar limpar imagem
-                    
-                    st.rerun() # Recarregar para atualizar o próximo código e limpar visualmente com os novos valores do session_state
+                    # clear_on_submit=True no form ja limpa todos os campos automaticamente
+                    st.rerun() # Recarregar para atualizar o proximo codigo
                 else:
                     st.error("Erro ao cadastrar mala. Tente novamente.")
             else:
