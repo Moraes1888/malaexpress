@@ -369,10 +369,27 @@ def get_malas(status=None):
     if status:
         query += f" WHERE m.status = '{status}'"
     else:
-        query += " WHERE m.status != 'Quebrada'"
+        # Por padrao, exclui Quebrada E Vendida (somente malas em circulacao para aluguel/venda)
+        query += " WHERE m.status NOT IN ('Quebrada', 'Vendida')"
     df = pd.read_sql(query, conn)
     conn.close()
     return df
+
+def get_malas_incluindo_vendidas():
+    """Retorna todas as malas, incluindo as vendidas (para relatorios/historico)."""
+    conn = sqlite3.connect(DB_NAME)
+    query = '''
+        SELECT m.*, g.nome as gestor_nome
+        FROM malas m
+        LEFT JOIN gestores g ON m.gestor_id = g.id
+    '''
+    df = pd.read_sql(query, conn)
+    conn.close()
+    return df
+
+def get_malas_vendidas():
+    """Retorna apenas as malas vendidas (para historico/consulta)."""
+    return get_malas(status='Vendida')
 
 def get_malas_para_gastos():
     conn = sqlite3.connect(DB_NAME)
@@ -410,8 +427,8 @@ def get_malas_disponiveis_por_data(data_inicio, data_fim):
     cursor.execute(query_ocupadas, (data_fim, data_inicio))
     malas_ocupadas = [row[0] for row in cursor.fetchall()]
     
-    # Busca todas as malas
-    df_malas = pd.read_sql("SELECT * FROM malas WHERE status != 'Quebrada'", conn)
+    # Busca todas as malas (em circulacao - exclui Quebrada e Vendida)
+    df_malas = pd.read_sql("SELECT * FROM malas WHERE status NOT IN ('Quebrada', 'Vendida')", conn)
     conn.close()
     
     # Filtra malas que NÃO estão na lista de ocupadas
@@ -1225,8 +1242,8 @@ def get_disponibilidade_periodo(data_inicio, data_fim):
     """
     conn = sqlite3.connect(DB_NAME)
     
-    # 1. Pegar todas as malas
-    df_malas = pd.read_sql("SELECT id, codigo, marca, tamanho, cor FROM malas WHERE status != 'Quebrada'", conn)
+    # 1. Pegar todas as malas (em circulacao - exclui Quebrada e Vendida)
+    df_malas = pd.read_sql("SELECT id, codigo, marca, tamanho, cor FROM malas WHERE status NOT IN ('Quebrada', 'Vendida')", conn)
     
     if df_malas.empty:
         conn.close()
@@ -1323,16 +1340,16 @@ def get_analise_financeira():
     return df
 
 def get_status_estoque():
-    """Retorna contagem de malas totais e disponíveis"""
+    """Retorna contagem de malas em circulacao (exclui Quebrada e Vendida) e disponiveis."""
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
-    
-    c.execute("SELECT count(*) FROM malas WHERE status != 'Quebrada'")
+
+    c.execute("SELECT count(*) FROM malas WHERE status NOT IN ('Quebrada', 'Vendida')")
     total = c.fetchone()[0]
-    
+
     c.execute("SELECT count(*) FROM malas WHERE status = 'Disponível'")
     disponiveis = c.fetchone()[0]
-    
+
     conn.close()
     return total, disponiveis
 

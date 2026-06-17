@@ -783,6 +783,17 @@ if st.session_state.page == "Dashboard":
             cols_show = ['codigo', 'tamanho', 'dimensoes', 'cor', 'marca', 'data_compra', 'valor_pago']
             cols_show = [c for c in cols_show if c in df_quebradas.columns]
             st.dataframe(df_quebradas[cols_show], use_container_width=True)
+
+    with st.expander("🛒 Malas Vendidas (Histórico)", expanded=False):
+        df_vendidas = get_malas_cached(status='Vendida')
+        if df_vendidas.empty:
+            st.info("Nenhuma mala vendida registrada. As vendas aparecem aqui após serem registradas na aba '🛒 Vender Mala'.")
+        else:
+            st.write(f"Total de malas vendidas: {len(df_vendidas)}")
+            cols_show_v = ['codigo', 'tamanho', 'cor', 'marca', 'data_compra', 'valor_pago']
+            cols_show_v = [c for c in cols_show_v if c in df_vendidas.columns]
+            st.dataframe(df_vendidas[cols_show_v], use_container_width=True)
+            st.caption("💡 Para detalhes da venda (cliente, valor, data, lucro), veja 'Análise Financeira → 🛒 Vendas de Malas'.")
     
     st.subheader("Galeria de Malas Disponíveis")
     
