@@ -1188,10 +1188,41 @@ elif st.session_state.page == "Cadastrar Mala":
                 row_v = malas_vendaveis[opcoes_v == mala_vender_str].iloc[0]
                 custo_aquisicao_v = float(row_v.get("valor_pago") or 0)
 
-                with st.form("form_vender_mala_cad"):
-                    col_v1, col_v2 = st.columns(2)
-                    with col_v1:
-                        tipo_mala_v = st.selectbox("Tipo", ["Nova", "Usada"], key="venda_cad_tipo")
+                st.info(f"💰 Custo de aquisição (valor pago) registrado no cadastro: **R$ {custo_aquisicao_v:,.2f}**")
+
+                # --- Bloco FORA do form: tipo + valor de venda ---
+                col_v_tipo, col_v_calc = st.columns(2)
+                with col_v_tipo:
+                    tipo_mala_v = st.selectbox("Tipo", ["Nova", "Usada"], key="venda_cad_tipo")
+
+                with col_v_calc:
+                    st.markdown("#### 💲 Valor de venda")
+                    modo_valor_v = st.radio(
+                        "Como definir o valor de venda?",
+                        ["Porcentagem sobre o custo", "Valor manual"],
+                        horizontal=True,
+                        key="venda_cad_modo_valor",
+                    )
+                    if modo_valor_v == "Porcentagem sobre o custo":
+                        percentual_v = st.number_input(
+                            "Porcentagem de lucro sobre o custo (%)",
+                            min_value=0.0,
+                            step=5.0,
+                            value=50.0,
+                            key="venda_cad_percentual",
+                            help="Ex: 50% sobre o custo. Custo R$ 200 + 50% = R$ 300.",
+                        )
+                        valor_calculado_v = custo_aquisicao_v * (1 + percentual_v / 100.0)
+                        st.success(f"📐 Cálculo: R$ {custo_aquisicao_v:,.2f} × (1 + {percentual_v:.1f}%) = **R$ {valor_calculado_v:,.2f}**")
+                        st.caption("Você pode ajustar o valor final abaixo se quiser.")
+                        valor_venda_v = st.number_input(
+                            "Valor final de venda (R$)",
+                            min_value=0.0,
+                            step=10.0,
+                            value=float(round(valor_calculado_v, 2)),
+                            key="venda_cad_valor",
+                        )
+                    else:
                         valor_venda_v = st.number_input(
                             "Valor de venda (R$)",
                             min_value=0.0,
@@ -1199,6 +1230,22 @@ elif st.session_state.page == "Cadastrar Mala":
                             value=0.0,
                             key="venda_cad_valor",
                         )
+
+                # Lucro estimado
+                if valor_venda_v > 0:
+                    lucro_estimado_v = valor_venda_v - custo_aquisicao_v
+                    margem_v = (lucro_estimado_v / valor_venda_v * 100) if valor_venda_v > 0 else 0
+                    cor_v = "🟢" if lucro_estimado_v > 0 else ("🔴" if lucro_estimado_v < 0 else "⚪")
+                    st.write(
+                        f"{cor_v} **Lucro estimado:** R$ {lucro_estimado_v:,.2f}  •  **Margem:** {margem_v:.1f}%"
+                    )
+
+                st.divider()
+
+                # --- Bloco DENTRO do form: pagamento, data, cliente, observação ---
+                with st.form("form_vender_mala_cad"):
+                    col_v1, col_v2 = st.columns(2)
+                    with col_v1:
                         forma_pagamento_v = st.selectbox(
                             "Forma de pagamento",
                             ["Dinheiro", "PIX", "Cartão de Crédito", "Cartão de Débito", "Boleto", "Transferência", "Outro"],
@@ -1206,39 +1253,40 @@ elif st.session_state.page == "Cadastrar Mala":
                         )
                     with col_v2:
                         data_venda_v = st.date_input("Data da venda", value=datetime.now().date(), key="venda_cad_data")
-                        try:
-                            df_clientes_v = db.get_clientes_cached()
-                        except Exception:
-                            df_clientes_v = pd.DataFrame()
-                        if df_clientes_v is None or df_clientes_v.empty:
-                            st.warning("Sem cliente cadastrado. Use 'Cliente avulso' abaixo.")
-                            cliente_id_v = None
-                            cliente_nome_v = st.text_input("Nome do cliente (avulso)", key="venda_cad_cliente_nome")
-                        else:
-                            cliente_tipo_v = st.radio(
-                                "Cliente",
-                                ["Cadastrado", "Avulso"],
-                                horizontal=True,
-                                key="venda_cad_cliente_tipo",
-                            )
-                            if cliente_tipo_v == "Cadastrado":
-                                opcoes_c = [f"{c['nome']} (id {c['id']})" for _, c in df_clientes_v.iterrows()]
-                                sel_c = st.selectbox("Selecione o cliente", opcoes_c, key="venda_cad_cliente_sel")
-                                if sel_c:
-                                    cid_v = int(sel_c.split("id ")[-1].rstrip(")"))
-                                    linha_c = df_clientes_v[df_clientes_v["id"] == cid_v]
-                                    if not linha_c.empty:
-                                        cliente_id_v = int(linha_c.iloc[0]["id"])
-                                        cliente_nome_v = str(linha_c.iloc[0]["nome"])
-                                    else:
-                                        cliente_id_v = None
-                                        cliente_nome_v = ""
+
+                    try:
+                        df_clientes_v = db.get_clientes_cached()
+                    except Exception:
+                        df_clientes_v = pd.DataFrame()
+                    if df_clientes_v is None or df_clientes_v.empty:
+                        st.warning("Sem cliente cadastrado. Use 'Cliente avulso' abaixo.")
+                        cliente_id_v = None
+                        cliente_nome_v = st.text_input("Nome do cliente (avulso)", key="venda_cad_cliente_nome")
+                    else:
+                        cliente_tipo_v = st.radio(
+                            "Cliente",
+                            ["Cadastrado", "Avulso"],
+                            horizontal=True,
+                            key="venda_cad_cliente_tipo",
+                        )
+                        if cliente_tipo_v == "Cadastrado":
+                            opcoes_c = [f"{c['nome']} (id {c['id']})" for _, c in df_clientes_v.iterrows()]
+                            sel_c = st.selectbox("Selecione o cliente", opcoes_c, key="venda_cad_cliente_sel")
+                            if sel_c:
+                                cid_v = int(sel_c.split("id ")[-1].rstrip(")"))
+                                linha_c = df_clientes_v[df_clientes_v["id"] == cid_v]
+                                if not linha_c.empty:
+                                    cliente_id_v = int(linha_c.iloc[0]["id"])
+                                    cliente_nome_v = str(linha_c.iloc[0]["nome"])
                                 else:
                                     cliente_id_v = None
                                     cliente_nome_v = ""
                             else:
                                 cliente_id_v = None
-                                cliente_nome_v = st.text_input("Nome do cliente (avulso)", key="venda_cad_cliente_nome_avulso")
+                                cliente_nome_v = ""
+                        else:
+                            cliente_id_v = None
+                            cliente_nome_v = st.text_input("Nome do cliente (avulso)", key="venda_cad_cliente_nome_avulso")
 
                     observacao_v = st.text_area("Observação", height=80, key="venda_cad_obs")
                     submitted_v = st.form_submit_button("💾 Registrar Venda desta Mala", use_container_width=True)
@@ -4061,55 +4109,92 @@ elif st.session_state.page == "🛒 Vender Mala":
 
     with tab_nova:
         st.markdown("### Registrar nova venda")
-        with st.form("form_venda_mala", clear_on_submit=True):
-            col_a, col_b = st.columns(2)
+        st.write("Defina a mala, o custo e a forma de calcular o valor de venda. Você pode usar uma **porcentagem sobre o custo** ou digitar o **valor manual** — o sistema aceita o valor que você colocar.")
 
-            with col_a:
-                tipo_mala = st.selectbox("Tipo da Mala", ["Nova", "Usada"], key="venda_tipo")
-                mala_opcao = st.radio(
-                    "Mala do estoque?",
-                    ["Usar mala do cadastro", "Mala avulsa (sem cadastro)"],
-                    horizontal=True,
-                    key="venda_origem",
-                )
+        # --- Bloco FORA do form para permitir recálculo dinâmico ---
+        col_a, col_b = st.columns(2)
+        with col_a:
+            tipo_mala = st.selectbox("Tipo da Mala", ["Nova", "Usada"], key="venda_tipo")
+            mala_opcao = st.radio(
+                "Mala do estoque?",
+                ["Usar mala do cadastro", "Mala avulsa (sem cadastro)"],
+                horizontal=True,
+                key="venda_origem",
+            )
 
-                mala_id = None
-                mala_codigo = ""
-                mala_tamanho = ""
-                custo_aquisicao = 0.0
+            mala_id = None
+            mala_codigo = ""
+            mala_tamanho = ""
+            custo_aquisicao = 0.0
+            custo_conhecido = False
 
-                if mala_opcao == "Usar mala do cadastro":
-                    try:
-                        df_malas = db.get_malas()
-                    except Exception:
-                        df_malas = pd.DataFrame()
-                    df_disponiveis = df_malas[df_malas["status"].isin(["Disponível", "Quebrada"])] if not df_malas.empty else df_malas
-                    if df_disponiveis.empty:
-                        st.warning("Nenhuma mala disponível para venda no cadastro. Cadastre uma mala ou use a opção 'Mala avulsa'.")
-                        mala_escolhida = None
-                    else:
-                        opcoes = [f"{row['codigo']} - {row['tamanho']}" for _, row in df_disponiveis.iterrows()]
-                        mala_escolhida = st.selectbox("Mala", opcoes, key="venda_mala_select")
-                        if mala_escolhida:
-                            codigo = mala_escolhida.split(" - ")[0]
-                            linha = df_disponiveis[df_disponiveis["codigo"] == codigo]
-                            if not linha.empty:
-                                row = linha.iloc[0]
-                                mala_id = int(row["id"])
-                                mala_codigo = str(row["codigo"])
-                                mala_tamanho = str(row["tamanho"])
-                                custo_aquisicao = float(row.get("valor_pago") or 0)
+            if mala_opcao == "Usar mala do cadastro":
+                try:
+                    df_malas = db.get_malas()
+                except Exception:
+                    df_malas = pd.DataFrame()
+                df_disponiveis = df_malas[df_malas["status"].isin(["Disponível", "Quebrada"])] if not df_malas.empty else df_malas
+                if df_disponiveis.empty:
+                    st.warning("Nenhuma mala disponível para venda no cadastro. Cadastre uma mala ou use a opção 'Mala avulsa'.")
+                    mala_escolhida = None
                 else:
-                    mala_codigo = st.text_input("Código / referência da mala", key="venda_mala_codigo")
-                    mala_tamanho = st.text_input("Tamanho (ex: P, M, G)", key="venda_mala_tamanho")
-                    custo_aquisicao = st.number_input(
-                        "Custo de aquisição (R$)",
-                        min_value=0.0,
-                        step=10.0,
-                        value=0.0,
-                        key="venda_mala_custo",
-                    )
+                    opcoes = [f"{row['codigo']} - {row['tamanho']} - {row.get('marca', '')}" for _, row in df_disponiveis.iterrows()]
+                    mala_escolhida = st.selectbox("Mala", opcoes, key="venda_mala_select")
+                    if mala_escolhida:
+                        codigo = mala_escolhida.split(" - ")[0]
+                        linha = df_disponiveis[df_disponiveis["codigo"] == codigo]
+                        if not linha.empty:
+                            row = linha.iloc[0]
+                            mala_id = int(row["id"])
+                            mala_codigo = str(row["codigo"])
+                            mala_tamanho = str(row["tamanho"])
+                            custo_aquisicao = float(row.get("valor_pago") or 0)
+                            custo_conhecido = True
+                            st.info(f"💰 Custo de aquisição (valor pago) registrado no cadastro: **R$ {custo_aquisicao:,.2f}**")
+            else:
+                mala_codigo = st.text_input("Código / referência da mala", key="venda_mala_codigo")
+                mala_tamanho = st.text_input("Tamanho (ex: P, M, G)", key="venda_mala_tamanho")
+                custo_aquisicao = st.number_input(
+                    "Custo de aquisição (R$)",
+                    min_value=0.0,
+                    step=10.0,
+                    value=0.0,
+                    key="venda_mala_custo",
+                )
+                custo_conhecido = True
 
+        with col_b:
+            # --- Cálculo de valor de venda ---
+            st.markdown("#### 💲 Valor de venda")
+            modo_valor = st.radio(
+                "Como definir o valor de venda?",
+                ["Porcentagem sobre o custo", "Valor manual"],
+                horizontal=True,
+                key="venda_modo_valor",
+            )
+
+            if modo_valor == "Porcentagem sobre o custo" and custo_conhecido:
+                percentual = st.number_input(
+                    "Porcentagem de lucro sobre o custo (%)",
+                    min_value=0.0,
+                    step=5.0,
+                    value=50.0,
+                    key="venda_percentual",
+                    help="Ex: 50% sobre o custo. Custo R$ 200 + 50% = R$ 300.",
+                )
+                valor_calculado = custo_aquisicao * (1 + percentual / 100.0)
+                st.success(f"📐 Cálculo: R$ {custo_aquisicao:,.2f} × (1 + {percentual:.1f}%) = **R$ {valor_calculado:,.2f}**")
+                st.caption("Você pode ajustar o valor final abaixo se quiser.")
+                valor_venda = st.number_input(
+                    "Valor final de venda (R$)",
+                    min_value=0.0,
+                    step=10.0,
+                    value=float(round(valor_calculado, 2)),
+                    key="venda_valor",
+                )
+            else:
+                if modo_valor == "Porcentagem sobre o custo" and not custo_conhecido:
+                    st.warning("Selecione primeiro uma mala do cadastro (ou preencha o custo) para usar a porcentagem.")
                 valor_venda = st.number_input(
                     "Valor de venda (R$)",
                     min_value=0.0,
@@ -4117,14 +4202,31 @@ elif st.session_state.page == "🛒 Vender Mala":
                     value=0.0,
                     key="venda_valor",
                 )
+
+            # Mostrar lucro estimado
+            if custo_conhecido and valor_venda > 0:
+                lucro_estimado = valor_venda - custo_aquisicao
+                margem = (lucro_estimado / valor_venda * 100) if valor_venda > 0 else 0
+                cor_lucro = "🟢" if lucro_estimado > 0 else ("🔴" if lucro_estimado < 0 else "⚪")
+                st.write(
+                    f"{cor_lucro} **Lucro estimado:** R$ {lucro_estimado:,.2f}  •  **Margem:** {margem:.1f}%"
+                )
+
+        st.divider()
+
+        # --- Bloco DENTRO do form (validação só no submit) ---
+        with st.form("form_venda_mala", clear_on_submit=True):
+            col_b2, col_c2 = st.columns(2)
+
+            with col_b2:
                 forma_pagamento = st.selectbox(
                     "Forma de pagamento",
                     ["Dinheiro", "PIX", "Cartão de Crédito", "Cartão de Débito", "Boleto", "Transferência", "Outro"],
                     key="venda_pagamento",
                 )
-
-            with col_b:
                 data_venda = st.date_input("Data da venda", value=datetime.now().date(), key="venda_data")
+
+            with col_c2:
                 try:
                     df_clientes = db.get_clientes_cached()
                 except Exception:
@@ -4149,11 +4251,17 @@ elif st.session_state.page == "🛒 Vender Mala":
                             if not linha.empty:
                                 cliente_id = int(linha.iloc[0]["id"])
                                 cliente_nome = str(linha.iloc[0]["nome"])
+                            else:
+                                cliente_id = None
+                                cliente_nome = ""
+                        else:
+                            cliente_id = None
+                            cliente_nome = ""
                     else:
                         cliente_id = None
                         cliente_nome = st.text_input("Nome do cliente (avulso)", key="venda_cliente_nome_avulso")
 
-                observacao = st.text_area("Observação", height=80, key="venda_obs")
+            observacao = st.text_area("Observação", height=80, key="venda_obs")
 
             submitted = st.form_submit_button("💾 Registrar Venda", use_container_width=True)
 
