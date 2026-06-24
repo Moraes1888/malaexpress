@@ -765,12 +765,41 @@ if st.session_state.page == "Dashboard":
     # -----------------------------------------------
     
     st.divider()
-    
+
     # Barra de Progresso de Ocupação
     if total_malas > 0:
         ocupacao = (total_malas - malas_disponiveis_hoje) / total_malas
         st.write(f"**Taxa de Ocupação Atual:** {ocupacao:.0%}")
         st.progress(ocupacao)
+
+    with st.expander("💾 Backup do Banco de Dados", expanded=False):
+        st.write("Faça backup do banco agora. Os arquivos ficam salvos na pasta `backups/` (mantém os 10 mais recentes).")
+        col_bk1, col_bk2 = st.columns([1, 2])
+        with col_bk1:
+            if st.button("💾 Fazer Backup Agora", type="primary", use_container_width=True):
+                ok_bk, msg_bk = db.backup_db()
+                if ok_bk:
+                    st.success(f"✅ {msg_bk}")
+                else:
+                    st.error(f"❌ {msg_bk}")
+        with col_bk2:
+            try:
+                pasta_backup = db.BACKUP_DIR
+                if os.path.exists(pasta_backup):
+                    arquivos = sorted([f for f in os.listdir(pasta_backup) if f.startswith("mala_express_") and f.endswith(".db")], reverse=True)
+                    if arquivos:
+                        st.caption(f"📁 Últimos backups em `{pasta_backup}`:")
+                        for arq in arquivos[:5]:
+                            tamanho = os.path.getsize(os.path.join(pasta_backup, arq))
+                            st.caption(f"• {arq} ({tamanho/1024:.1f} KB)")
+                        if len(arquivos) > 5:
+                            st.caption(f"... e mais {len(arquivos) - 5} backups antigos.")
+                    else:
+                        st.caption("Nenhum backup ainda. Use o botão ao lado para criar o primeiro.")
+                else:
+                    st.caption("Pasta de backup ainda não existe.")
+            except Exception as e:
+                st.caption(f"Não foi possível listar backups: {e}")
 
     with st.expander("🛑 Malas Quebradas (fora do estoque)", expanded=False):
         if 'ultima_mala_quebrada' in st.session_state and st.session_state['ultima_mala_quebrada']:
