@@ -8,15 +8,13 @@ import requests
 import math
 import time
 from PIL import Image
-try:
-    from pillow_heif import register_heif_opener
-    register_heif_opener() # Habilita suporte a HEIC/HEIF
-except Exception:
-    pass # pillow_heif e opcional
+from pillow_heif import register_heif_opener
+register_heif_opener() # Habilita suporte a HEIC/HEIF
 from streamlit_calendar import calendar
 import socket
 import qrcode
 from io import BytesIO
+from pyngrok import ngrok
 from fpdf import FPDF
 import hashlib
 
@@ -28,43 +26,6 @@ def get_coordinates_from_cep_cached(cep):
 
 # Configuração da Página
 st.set_page_config(page_title="MalaExpress - Sistema de Controle", page_icon="🧳", layout="wide")
-
-# Inicializar banco e autenticacao
-try:
-    db.init_db()
-except Exception as e:
-    st.error(f"Erro ao inicializar banco de dados: {e}")
-    st.stop()
-
-if "usuario_logado" not in st.session_state:
-    st.session_state.usuario_logado = None
-if "auth_ok" not in st.session_state:
-    st.session_state.auth_ok = False
-
-# Tela de login (para acesso online e local)
-if not st.session_state.auth_ok:
-    st.title("🧳 MalaExpress")
-    st.subheader("Acesso ao Sistema")
-    st.info("Entre com seu email e senha para acessar o sistema.")
-    with st.form("form_login"):
-        email_login = st.text_input("Email", placeholder="ex: socio@malaexpress.local")
-        senha_login = st.text_input("Senha", type="password")
-        entrar = st.form_submit_button("Entrar", use_container_width=True)
-        if entrar:
-            usuario = db.authenticate_user(email_login, senha_login)
-            if usuario:
-                st.session_state.usuario_logado = usuario
-                st.session_state.auth_ok = True
-                st.success(f"Bem-vindo, {usuario['nome']}!")
-                st.rerun()
-            else:
-                st.error("Email ou senha inválidos.")
-
-    with st.expander("ℹ️ Acessos iniciais", expanded=True):
-        st.write("**Administrador:** `admin@malaexpress.local` / `MalaExpress2026!`")
-        st.write("**Sócio:** `socio@malaexpress.local` / `Socio2026!`")
-        st.caption("Depois você pode trocar as senhas e criar novos usuários.")
-    st.stop()
 
 # --- FUNÇÕES DE DISTÂNCIA E CEP ---
 def get_coordinates_nominatim(query):
@@ -722,17 +683,9 @@ if is_external and is_mobile and st.session_state.page == "Dashboard":
 # Navegação Lateral
 menu_restrito = ["Novo Aluguel"]
 menu_completo = ["Dashboard", "Cadastrar Mala", "Cadastrar Cliente", "Novo Aluguel", "Devoluções", "Calendário de Reservas", "Análise Financeira", "Contrato de Aluguel", "🛒 Vender Mala", "🚚 Calculadora de Frete", "📱 Acesso Mobile"]
-# Menu do socio: visualizacao + cadastro de alugueis, sem acesso a financeiro/cadastros criticos
-menu_socio = ["Dashboard", "Cadastrar Mala", "Cadastrar Cliente", "Novo Aluguel", "Devoluções", "Calendário de Reservas", "Contrato de Aluguel"]
 
-# Definir menu baseado no role do usuario logado
-user_role_atual = st.session_state.get("usuario_logado", {}).get("role", "admin")
-if user_role_atual == "socio":
-    menu = menu_socio
-elif is_external and is_mobile:
-    menu = menu_restrito
-else:
-    menu = menu_completo
+# Se acesso externo + mobile, mostra só o menu restrito
+menu = menu_restrito if (is_external and is_mobile) else menu_completo
 
 # Mostrar info de conexão
 if is_external and is_mobile:
@@ -755,23 +708,6 @@ if is_external and is_mobile and st.session_state.page != "Novo Aluguel":
     st.warning("📱 Acesso mobile externo restrito. Apenas 'Novo Aluguel' está disponível.")
     st.session_state.page = "Novo Aluguel"
     st.rerun()
-
-# Se socio tentar acessar pagina restrita (Análise Financeira, Vender Mala, Calculadora, Acesso Mobile), redirecionar
-if user_role_atual == "socio" and st.session_state.page in ["Análise Financeira", "🛒 Vender Mala", "🚚 Calculadora de Frete", "📱 Acesso Mobile"]:
-    st.warning("Acesso restrito. Essa aba é só para administradores.")
-    st.session_state.page = "Dashboard"
-    st.rerun()
-
-# Info do usuario logado e logout (sidebar)
-with st.sidebar:
-    st.divider()
-    user_atual = st.session_state.get("usuario_logado") or {}
-    role_emoji = "👑" if user_atual.get("role") == "admin" else "👤"
-    st.caption(f"{role_emoji} **{user_atual.get('nome', 'Convidado')}** ({user_atual.get('role', '?')})")
-    if st.button("🚪 Sair", use_container_width=True, key="btn_logout"):
-        st.session_state.auth_ok = False
-        st.session_state.usuario_logado = None
-        st.rerun()
 
 # --- DASHBOARD ---
 if st.session_state.page == "Dashboard":
@@ -2702,7 +2638,7 @@ elif st.session_state.page == "Análise Financeira":
     st.subheader("Análise Financeira e Controle de Gastos")
     
     # Criar abas para separar Análise de ROI e Controle de Gastos Extras
-    tab_geral, tab_analise, tab_gastos, tab_vendas, tab_usuarios = st.tabs(["💼 Balanço Geral do Negócio", "📊 Análise de Aluguéis & ROI", "💸 Controle de Gastos Extras", "🛒 Vendas de Malas", "👥 Usuários"])
+    tab_geral, tab_analise, tab_gastos, tab_vendas = st.tabs(["💼 Balanço Geral do Negócio", "📊 Análise de Aluguéis & ROI", "💸 Controle de Gastos Extras", "🛒 Vendas de Malas"])
     
     with tab_geral:
         st.subheader("💰 Visão Macro do Negócio")
@@ -3916,81 +3852,6 @@ elif st.session_state.page == "Análise Financeira":
             "**Faturamento de Aluguéis - Saídas do Caixa (Gastos Extras + Reinvestimentos)**. "
             "Vendas não impactam esse saldo."
         )
-
-    with tab_usuarios:
-        st.subheader("👥 Gerenciamento de Usuários")
-        st.caption("Crie novos usuários, troque senhas e ative/desative acessos. Apenas administradores gerenciam usuários.")
-
-        df_usuarios = db.listar_usuarios()
-        st.markdown("### Usuários cadastrados")
-        if df_usuarios.empty:
-            st.info("Nenhum usuário cadastrado.")
-        else:
-            df_show = df_usuarios.copy()
-            df_show["ativo"] = df_show["ativo"].map({1: "✅ Sim", 0: "❌ Não"})
-            df_show.columns = ["ID", "Email", "Nome", "Role", "Ativo", "Criado em"]
-            st.dataframe(df_show, use_container_width=True, hide_index=True)
-
-        st.divider()
-        st.markdown("### ➕ Adicionar novo usuário")
-        with st.form("form_add_usuario", clear_on_submit=True):
-            col_u1, col_u2 = st.columns(2)
-            with col_u1:
-                novo_nome = st.text_input("Nome completo")
-                novo_email = st.text_input("Email (será usado para login)")
-            with col_u2:
-                nova_senha = st.text_input("Senha (mín. 6 caracteres)", type="password")
-                novo_role = st.selectbox("Perfil", ["socio", "admin"], help="Sócio tem acesso limitado; Admin tem acesso total.")
-            submitted_user = st.form_submit_button("Criar Usuário", use_container_width=True)
-            if submitted_user:
-                if not novo_nome or not novo_email or not nova_senha:
-                    st.error("Preencha todos os campos.")
-                elif len(nova_senha) < 6:
-                    st.error("A senha deve ter no mínimo 6 caracteres.")
-                else:
-                    ok_u, err_u = db.add_usuario(novo_email, novo_nome, nova_senha, novo_role)
-                    if ok_u:
-                        st.success(f"Usuário {novo_email} criado com perfil {novo_role}.")
-                        st.rerun()
-                    else:
-                        st.error(f"Erro: {err_u}")
-
-        st.divider()
-        st.markdown("### 🔑 Trocar senha / Ativar-Desativar")
-        if not df_usuarios.empty:
-            opcoes_users = [f"{row['nome']} ({row['email']})" for _, row in df_usuarios.iterrows()]
-            user_selecionado = st.selectbox("Selecione o usuário", opcoes_users, key="user_sel_admin")
-            if user_selecionado:
-                email_user = user_selecionado.split("(")[-1].rstrip(")")
-                row_user = df_usuarios[df_usuarios["email"] == email_user].iloc[0]
-                uid_user = int(row_user["id"])
-
-                col_a1, col_a2 = st.columns(2)
-                with col_a1:
-                    with st.form("form_trocar_senha"):
-                        nova_senha_user = st.text_input("Nova senha", type="password", key="nova_senha_admin")
-                        submit_senha = st.form_submit_button("Trocar Senha", use_container_width=True)
-                        if submit_senha:
-                            if len(nova_senha_user) < 6:
-                                st.error("Mínimo 6 caracteres.")
-                            else:
-                                ok_s, err_s = db.update_usuario_senha(uid_user, nova_senha_user)
-                                if ok_s:
-                                    st.success("Senha atualizada.")
-                                else:
-                                    st.error(f"Erro: {err_s}")
-
-                with col_a2:
-                    ativo_atual = int(row_user["ativo"])
-                    novo_ativo = not ativo_atual
-                    label_btn = "❌ Desativar" if ativo_atual else "✅ Ativar"
-                    if st.button(label_btn, use_container_width=True, key="btn_toggle_user"):
-                        ok_t, err_t = db.toggle_usuario_ativo(uid_user, novo_ativo)
-                        if ok_t:
-                            st.success("Status alterado.")
-                            st.rerun()
-                        else:
-                            st.error(f"Erro: {err_t}")
 
 # --- CONTRATO DE ALUGUEL ---
 elif st.session_state.page == "Contrato de Aluguel":

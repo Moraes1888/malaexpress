@@ -10,7 +10,7 @@ DATA_DIR = os.getenv("MALAEXPRESS_DATA_DIR", BASE_DIR)
 DB_NAME = os.getenv("MALAEXPRESS_DB_PATH", os.path.join(DATA_DIR, "mala_express.db"))
 BACKUP_DIR = os.getenv("MALAEXPRESS_BACKUP_DIR", os.path.join(DATA_DIR, "backups"))
 BUNDLED_DB_PATH = os.path.join(BASE_DIR, "mala_express.db")
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 3
 
 def ensure_data_storage():
     os.makedirs(os.path.dirname(DB_NAME), exist_ok=True)
@@ -290,35 +290,6 @@ def init_db():
             )
         ''')
         c.execute("CREATE INDEX IF NOT EXISTS idx_vendas_data ON vendas_malas(data_venda)")
-
-    if versao_atual < 4:
-        # Tabela de Usuarios (login com email + senha hash)
-        # Drop a tabela antiga (caso exista com schema diferente - username/password_hash/perfil)
-        c.execute("DROP TABLE IF EXISTS usuarios")
-        c.execute('''
-            CREATE TABLE usuarios (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                email TEXT UNIQUE NOT NULL,
-                nome TEXT NOT NULL,
-                senha_hash TEXT NOT NULL,
-                role TEXT NOT NULL DEFAULT 'socio',
-                ativo INTEGER DEFAULT 1,
-                criado_em DATE DEFAULT CURRENT_DATE
-            )
-        ''')
-        c.execute("CREATE INDEX IF NOT EXISTS idx_usuarios_email ON usuarios(email)")
-
-        # Cria usuarios padrao
-        admin_hash = hashlib.sha256(("MalaExpress2026!").encode("utf-8")).hexdigest()
-        c.execute(
-            "INSERT INTO usuarios (email, nome, senha_hash, role) VALUES (?, ?, ?, ?)",
-            ("admin@malaexpress.local", "Administrador", admin_hash, "admin"),
-        )
-        socio_hash = hashlib.sha256(("Socio2026!").encode("utf-8")).hexdigest()
-        c.execute(
-            "INSERT INTO usuarios (email, nome, senha_hash, role) VALUES (?, ?, ?, ?)",
-            ("socio@malaexpress.local", "Socio", socio_hash, "socio"),
-        )
 
     # Atualizar versão do schema
     c.execute("INSERT OR REPLACE INTO schema_version (versao, data_atualizacao) VALUES (?, CURRENT_DATE)", (SCHEMA_VERSION,))
@@ -1817,80 +1788,6 @@ def delete_venda_mala(venda_id):
         # Reverter status da mala se ela existir
         if mala_id:
             c.execute("UPDATE malas SET status = 'Disponível' WHERE id = ? AND status = 'Vendida'", (mala_id,))
-        conn.commit()
-        return True, None
-    except Exception as e:
-        conn.rollback()
-        return False, str(e)
-    finally:
-        conn.close()
-
-# --- Autenticacao de Usuarios ---
-def hash_senha(senha):
-    return hashlib.sha256(senha.encode("utf-8")).hexdigest()
-
-def authenticate_user(email, senha):
-    """Valida credenciais. Retorna dict com dados do usuario ou None."""
-    conn = sqlite3.connect(DB_NAME)
-    c = conn.cursor()
-    try:
-        c.execute(
-            "SELECT id, email, nome, senha_hash, role, ativo FROM usuarios WHERE email = ? AND ativo = 1",
-            (str(email).strip().lower(),),
-        )
-        row = c.fetchone()
-    finally:
-        conn.close()
-    if not row:
-        return None
-    uid, em, nome, senha_hash_db, role, ativo = row
-    if hash_senha(senha) != senha_hash_db:
-        return None
-    return {"id": uid, "email": em, "nome": nome, "role": role}
-
-def listar_usuarios():
-    conn = sqlite3.connect(DB_NAME)
-    df = pd.read_sql(
-        "SELECT id, email, nome, role, ativo, criado_em FROM usuarios ORDER BY id",
-        conn,
-    )
-    conn.close()
-    return df
-
-def add_usuario(email, nome, senha, role="socio"):
-    conn = sqlite3.connect(DB_NAME)
-    c = conn.cursor()
-    try:
-        c.execute(
-            "INSERT INTO usuarios (email, nome, senha_hash, role) VALUES (?, ?, ?, ?)",
-            (str(email).strip().lower(), nome, hash_senha(senha), role),
-        )
-        conn.commit()
-        return True, None
-    except Exception as e:
-        conn.rollback()
-        return False, str(e)
-    finally:
-        conn.close()
-
-def update_usuario_senha(uid, nova_senha):
-    conn = sqlite3.connect(DB_NAME)
-    c = conn.cursor()
-    try:
-        c.execute("UPDATE usuarios SET senha_hash = ? WHERE id = ?", (hash_senha(nova_senha), uid))
-        conn.commit()
-        return True, None
-    except Exception as e:
-        conn.rollback()
-        return False, str(e)
-    finally:
-        conn.close()
-
-def toggle_usuario_ativo(uid, ativo):
-    conn = sqlite3.connect(DB_NAME)
-    c = conn.cursor()
-    try:
-        c.execute("UPDATE usuarios SET ativo = ? WHERE id = ?", (1 if ativo else 0, uid))
         conn.commit()
         return True, None
     except Exception as e:
