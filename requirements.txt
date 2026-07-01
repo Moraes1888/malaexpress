@@ -1,11 +1,10 @@
-streamlit
-pandas
-plotly
-Pillow
-streamlit-calendar
-qrcode
-pyngrok
-pillow-heif
-matplotlib
-fpdf
-requests
+streamlit>=1.30
+pandas>=2.0
+plotly>=5.18
+Pillow>=10.0
+streamlit-calendar>=0.5
+qrcode>=7.4
+matplotlib>=3.7
+fpdf>=1.7
+requests>=2.31
+# pillow-heif e opcional (suporte a HEIC/HEIF)
