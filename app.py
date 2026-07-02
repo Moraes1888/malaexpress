@@ -682,7 +682,7 @@ if is_external and is_mobile and st.session_state.page == "Dashboard":
 
 # Navegação Lateral
 menu_restrito = ["Novo Aluguel"]
-menu_completo = ["Dashboard", "Cadastrar Mala", "Cadastrar Cliente", "Novo Aluguel", "Devoluções", "Calendário de Reservas", "Análise Financeira", "Contrato de Aluguel", "🛒 Vender Mala", "📄 Documentos Fiscais", "🚚 Calculadora de Frete", "📱 Acesso Mobile"]
+menu_completo = ["Dashboard", "Cadastrar Mala", "Cadastrar Cliente", "Novo Aluguel", "Devoluções", "Calendário de Reservas", "Análise Financeira", "Contrato de Aluguel", "🛒 Vender Mala", "📦 Estoque Atual", "📄 Documentos Fiscais", "🚚 Calculadora de Frete", "📱 Acesso Mobile"]
 
 # Se acesso externo + mobile, mostra só o menu restrito
 menu = menu_restrito if (is_external and is_mobile) else menu_completo
@@ -4377,6 +4377,190 @@ elif st.session_state.page == "🛒 Vender Mala":
                         st.rerun()
                     else:
                         st.error(f"Erro: {erro_del}")
+
+# --- ESTOQUE ATUAL DE MALAS ---
+elif st.session_state.page == "📦 Estoque Atual":
+    st.header("📦 Estoque Atual de Malas")
+    st.caption("Visão geral do estoque: total em circulação, em aluguel, disponíveis, quebradas e vendidas.")
+
+    # Traz TODAS as malas (incluindo vendidas, para ter o panorama completo)
+    df_todas = db.get_malas_incluindo_vendidas()
+
+    if df_todas.empty:
+        st.info("Nenhuma mala cadastrada. Cadastre em 'Cadastrar Mala' para começar.")
+    else:
+        # 1) Metricas
+        total_cadastradas = len(df_todas)
+        total_disp = int((df_todas["status"] == "Disponível").sum())
+        total_alug = int((df_todas["status"] == "Alugada").sum())
+        total_quebr = int((df_todas["status"] == "Quebrada").sum())
+        total_vend = int((df_todas["status"] == "Vendida").sum())
+        total_circulacao = total_disp + total_alug  # Em circulacao = Disponivel + Alugada
+
+        # Valor do estoque (custo de aquisicao das malas em circulacao)
+        df_circ = df_todas[df_todas["status"].isin(["Disponível", "Alugada"])]
+        valor_estoque = float(df_circ["valor_pago"].fillna(0).sum())
+
+        col_m1, col_m2, col_m3, col_m4, col_m5 = st.columns(5)
+        col_m1.metric("📊 Total Cadastradas", f"{total_cadastradas}")
+        col_m2.metric("🟢 Disponíveis", f"{total_disp}")
+        col_m3.metric("🔵 Alugadas", f"{total_alug}")
+        col_m4.metric("🟠 Quebradas", f"{total_quebr}")
+        col_m5.metric("🛒 Vendidas", f"{total_vend}")
+
+        st.markdown(f"**💰 Valor investido no estoque em circulação (Disponíveis + Alugadas):** `R$ {valor_estoque:,.2f}`")
+        st.caption(f"Em circulação (pronto para alugar ou já alugado): {total_circulacao} unidades")
+
+        st.divider()
+
+        # 2) Filtros
+        st.markdown("### 🔍 Filtrar e consultar")
+        col_f1, col_f2, col_f3 = st.columns(3)
+        with col_f1:
+            status_opcoes = ["Todos"] + sorted(df_todas["status"].dropna().unique().tolist())
+            status_filtro = st.selectbox("Status", options=status_opcoes, key="filtro_status_estoque")
+        with col_f2:
+            tamanhos_opcoes = ["Todos"] + sorted(df_todas["tamanho"].dropna().astype(str).unique().tolist())
+            tamanho_filtro = st.selectbox("Tamanho", options=tamanhos_opcoes, key="filtro_tam_estoque")
+        with col_f3:
+            busca_codigo = st.text_input("Buscar por código", placeholder="Ex: M048", key="filtro_busca_estoque")
+
+        # Aplica filtros
+        df_filtrado = df_todas.copy()
+        if status_filtro != "Todos":
+            df_filtrado = df_filtrado[df_filtrado["status"] == status_filtro]
+        if tamanho_filtro != "Todos":
+            df_filtrado = df_filtrado[df_filtrado["tamanho"].astype(str) == tamanho_filtro]
+        if busca_codigo:
+            df_filtrado = df_filtrado[df_filtrado["codigo"].astype(str).str.contains(busca_codigo, case=False, na=False)]
+
+        st.caption(f"Mostrando **{len(df_filtrado)}** de **{total_cadastradas}** malas")
+
+        # 3) Juntar informacoes de alugueis ativos para localizar a mala alugada
+        df_alugueis_ativos = db.get_alugueis_ativos()
+        # Monta dicionario mala_id -> info do aluguel atual
+        malas_alugadas_info = {}
+        for _, al in df_alugueis_ativos.iterrows():
+            malas_alugadas_info[int(al["mala_id"])] = {
+                "aluguel_id": int(al["id"]),
+                "cliente_nome": str(al["cliente_nome"]),
+                "cliente_telefone": str(al.get("cliente_telefone") or ""),
+                "data_saida": al["data_saida"],
+                "data_prevista_retorno": al["data_prevista_retorno"],
+                "valor": float(al["valor"] or 0),
+                "status_pagamento": str(al.get("status_pagamento") or ""),
+                "destino": str(al.get("destino") or ""),
+            }
+
+        # 4) Tabela principal
+        colunas_base = ["codigo", "tamanho", "marca", "cor", "status", "dimensoes", "data_compra", "valor_pago"]
+        colunas_base = [c for c in colunas_base if c in df_filtrado.columns]
+        df_show = df_filtrado[colunas_base].copy()
+        df_show["data_compra"] = pd.to_datetime(df_show["data_compra"], errors="coerce").dt.strftime("%d/%m/%Y")
+
+        # Adiciona coluna de localizacao quando alugada
+        def localizar(row):
+            mid = int(row.name) if row.name is not None else None
+            info = malas_alugadas_info.get(mid)
+            if row["status"] == "Alugada" and info:
+                saida = pd.to_datetime(info["data_saida"]).strftime("%d/%m/%Y") if info["data_saida"] else "-"
+                retorno = pd.to_datetime(info["data_prevista_retorno"]).strftime("%d/%m/%Y") if info["data_prevista_retorno"] else "-"
+                txt = f"👤 {info['cliente_nome']} • 📅 {saida} → {retorno} • R$ {info['valor']:,.2f} ({info['status_pagamento']})"
+                if info["destino"]:
+                    txt += f" • 📍 {info['destino']}"
+                return txt
+            return ""
+
+        df_show["Localização Atual"] = df_filtrado.apply(localizar, axis=1)
+        df_show.columns = ["Código", "Tamanho", "Marca", "Cor", "Status", "Dimensões", "Data Compra", "Valor Pago (R$)", "Localização Atual"]
+        st.dataframe(
+            df_show.style.format({"Valor Pago (R$)": "R$ {:,.2f}"}),
+            use_container_width=True,
+            hide_index=True,
+        )
+
+        st.divider()
+
+        # 5) Resumo agrupado por status
+        st.markdown("### 📊 Resumo por Status")
+        df_por_status = df_todas.groupby("status").agg(
+            Quantidade=("id", "count"),
+            Valor_Total=("valor_pago", lambda s: float(s.fillna(0).sum())),
+        ).reset_index()
+        df_por_status.columns = ["Status", "Quantidade", "Valor Total (R$)"]
+        st.dataframe(
+            df_por_status.style.format({"Valor Total (R$)": "R$ {:,.2f}"}),
+            use_container_width=True,
+            hide_index=True,
+        )
+
+        st.markdown("### 📐 Resumo por Tamanho")
+        df_por_tam = df_todas.groupby("tamanho").agg(
+            Quantidade=("id", "count"),
+            Disponiveis=("status", lambda s: int((s == "Disponível").sum())),
+            Alugadas=("status", lambda s: int((s == "Alugada").sum())),
+            Quebradas=("status", lambda s: int((s == "Quebrada").sum())),
+            Vendidas=("status", lambda s: int((s == "Vendida").sum())),
+        ).reset_index()
+        df_por_tam.columns = ["Tamanho", "Total", "Disponíveis", "Alugadas", "Quebradas", "Vendidas"]
+        st.dataframe(df_por_tam, use_container_width=True, hide_index=True)
+
+        # 6) Grafico de pizza / barras
+        st.markdown("### 📈 Distribuição Visual")
+        if not df_por_status.empty:
+            cores_status = {
+                "Disponível": "#28a745",
+                "Alugada": "#1E90FF",
+                "Quebrada": "#fd7e14",
+                "Vendida": "#6c757d",
+            }
+            fig_pizza = px.pie(
+                df_por_status,
+                names="Status",
+                values="Quantidade",
+                title="Distribuição do Estoque por Status",
+                color="Status",
+                color_discrete_map=cores_status,
+                hole=0.4,
+            )
+            fig_pizza.update_traces(textposition="inside", textinfo="percent+label")
+            fig_pizza.update_layout(height=420, showlegend=True)
+            st.plotly_chart(fig_pizza, use_container_width=True)
+
+        # 7) Detalhe: malas alugadas com previsao de retorno HOJE ou ATRASADAS
+        st.divider()
+        st.markdown("### ⏰ Aluguéis com devolução HOJE ou ATRASADA")
+        hoje = date.today()
+        df_alugaveis_atraso = []
+        for _, al in df_alugueis_ativos.iterrows():
+            previsao = al.get("data_prevista_retorno")
+            if previsao:
+                try:
+                    prev_dt = pd.to_datetime(previsao).date()
+                    if prev_dt <= hoje:
+                        df_alugaveis_atraso.append({
+                            "Código": al["mala_codigo"],
+                            "Tamanho": al["tamanho"],
+                            "Cliente": al["cliente_nome"],
+                            "Telefone": al.get("cliente_telefone") or "",
+                            "Saída": pd.to_datetime(al["data_saida"]).strftime("%d/%m/%Y"),
+                            "Prev. Retorno": prev_dt.strftime("%d/%m/%Y"),
+                            "Dias de Atraso": (hoje - prev_dt).days,
+                            "Valor (R$)": float(al["valor"] or 0),
+                            "Destino": al.get("destino") or "",
+                        })
+                except Exception:
+                    pass
+        if df_alugaveis_atraso:
+            df_atraso = pd.DataFrame(df_alugaveis_atraso).sort_values("Dias de Atraso", ascending=False)
+            st.warning(f"⚠️ {len(df_atraso)} mala(s) com devolução prevista para hoje ou atrasada(s).")
+            st.dataframe(
+                df_atraso.style.format({"Valor (R$)": "R$ {:,.2f}"}),
+                use_container_width=True,
+                hide_index=True,
+            )
+        else:
+            st.success("✅ Nenhuma mala alugada está atrasada ou com devolução prevista para hoje.")
 
 # --- DOCUMENTOS FISCAIS ---
 elif st.session_state.page == "📄 Documentos Fiscais":
