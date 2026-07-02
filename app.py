@@ -682,7 +682,7 @@ if is_external and is_mobile and st.session_state.page == "Dashboard":
 
 # Navegação Lateral
 menu_restrito = ["Novo Aluguel"]
-menu_completo = ["Dashboard", "Cadastrar Mala", "Cadastrar Cliente", "Novo Aluguel", "Devoluções", "Calendário de Reservas", "Análise Financeira", "Contrato de Aluguel", "🛒 Vender Mala", "🚚 Calculadora de Frete", "📱 Acesso Mobile"]
+menu_completo = ["Dashboard", "Cadastrar Mala", "Cadastrar Cliente", "Novo Aluguel", "Devoluções", "Calendário de Reservas", "Análise Financeira", "Contrato de Aluguel", "🛒 Vender Mala", "📄 Documentos Fiscais", "🚚 Calculadora de Frete", "📱 Acesso Mobile"]
 
 # Se acesso externo + mobile, mostra só o menu restrito
 menu = menu_restrito if (is_external and is_mobile) else menu_completo
@@ -4377,6 +4377,207 @@ elif st.session_state.page == "🛒 Vender Mala":
                         st.rerun()
                     else:
                         st.error(f"Erro: {erro_del}")
+
+# --- DOCUMENTOS FISCAIS ---
+elif st.session_state.page == "📄 Documentos Fiscais":
+    st.header("📄 Documentos Fiscais")
+    st.caption("Faça upload de notas fiscais, recibos e comprovantes. O sistema calcula o total por mês e permite baixar tudo de uma vez.")
+
+    tab_upload_doc, tab_consulta_doc = st.tabs(["➕ Adicionar Documento", "📋 Consulta por Mês"])
+
+    with tab_upload_doc:
+        st.markdown("### Adicionar novo documento")
+        st.write("Preencha os dados e faça upload do arquivo (PDF, imagem ou outro).")
+
+        with st.form("form_doc_fiscal", clear_on_submit=True):
+            col_d1, col_d2 = st.columns(2)
+            with col_d1:
+                descricao_doc = st.text_input("Descrição*", placeholder="Ex: NF 12345 - Fornecedor X")
+                tipo_doc = st.selectbox(
+                    "Tipo*",
+                    ["Nota Fiscal", "Recibo", "Boleto", "Comprovante", "Cupom Fiscal", "Outro"],
+                )
+                data_doc = st.date_input("Data do documento*", value=datetime.now().date())
+            with col_d2:
+                valor_doc = st.number_input("Valor (R$)*", min_value=0.0, step=10.0, value=0.0)
+                arquivo_doc = st.file_uploader(
+                    "Arquivo (PDF, imagem, etc.)",
+                    type=["pdf", "png", "jpg", "jpeg", "webp", "heic", "bmp", "tiff"],
+                    help="Tamanho máximo recomendado: 10 MB por arquivo.",
+                )
+                obs_doc = st.text_area("Observação", height=80)
+
+            submitted_doc = st.form_submit_button("💾 Salvar Documento", use_container_width=True)
+
+            if submitted_doc:
+                if not descricao_doc or not str(descricao_doc).strip():
+                    st.error("Informe a descrição.")
+                elif valor_doc <= 0:
+                    st.error("Informe um valor maior que zero.")
+                else:
+                    # 1) Inserir registro sem arquivo
+                    ok_doc, err_doc = db.add_documento_fiscal(
+                        descricao=str(descricao_doc).strip(),
+                        tipo=tipo_doc,
+                        data_documento=data_doc.isoformat(),
+                        valor=float(valor_doc),
+                        observacao=str(obs_doc or "").strip(),
+                    )
+                    if ok_doc:
+                        # 2) Pegar id do registro inserido para nome do arquivo
+                        conn_tmp = sqlite3.connect(db.DB_NAME)
+                        cur_tmp = conn_tmp.cursor()
+                        cur_tmp.execute("SELECT last_insert_rowid()")
+                        new_id = int(cur_tmp.fetchone()[0])
+                        conn_tmp.close()
+
+                        # 3) Se houver arquivo, salvar e atualizar registro
+                        if arquivo_doc is not None:
+                            try:
+                                full_path, safe_name = db.save_uploaded_file(arquivo_doc, new_id)
+                                conn_tmp = sqlite3.connect(db.DB_NAME)
+                                cur_tmp = conn_tmp.cursor()
+                                cur_tmp.execute(
+                                    """UPDATE documentos_fiscais
+                                       SET arquivo_nome = ?, arquivo_path = ?,
+                                           arquivo_mime = ?, arquivo_tamanho = ?
+                                       WHERE id = ?""",
+                                    (
+                                        arquivo_doc.name,
+                                        full_path,
+                                        arquivo_doc.type or "application/octet-stream",
+                                        arquivo_doc.size,
+                                        new_id,
+                                    ),
+                                )
+                                conn_tmp.commit()
+                                conn_tmp.close()
+                                st.success(f"✅ Documento salvo e arquivo anexado: {arquivo_doc.name}")
+                            except Exception as e:
+                                st.warning(f"Documento salvo, mas falha ao anexar arquivo: {e}")
+                        else:
+                            st.success("✅ Documento salvo (sem arquivo).")
+                        st.balloons()
+                    else:
+                        st.error(f"Erro ao salvar: {err_doc}")
+
+    with tab_consulta_doc:
+        st.markdown("### Documentos agrupados por mês")
+
+        df_meses = db.get_documentos_mensal()
+        resumo_doc = db.get_resumo_documentos()
+
+        col_m1, col_m2, col_m3 = st.columns(3)
+        col_m1.metric("Total de Documentos", f"{resumo_doc['total_docs']}")
+        col_m2.metric("Valor Total Acumulado", f"R$ {resumo_doc['total_valor']:,.2f}")
+        col_m3.metric("Meses com Registro", f"{len(df_meses)}")
+
+        st.divider()
+
+        if df_meses.empty:
+            st.info("Nenhum documento cadastrado. Use a aba '➕ Adicionar Documento' para começar.")
+        else:
+            meses_nomes = {
+                1: "Janeiro", 2: "Fevereiro", 3: "Março", 4: "Abril",
+                5: "Maio", 6: "Junho", 7: "Julho", 8: "Agosto",
+                9: "Setembro", 10: "Outubro", 11: "Novembro", 12: "Dezembro",
+            }
+            for _, linha_mes in df_meses.iterrows():
+                mes = int(linha_mes["mes"])
+                ano = int(linha_mes["ano"])
+                mes_nome = meses_nomes.get(mes, str(mes))
+                total_mes = float(linha_mes["total_valor"])
+                total_docs_mes = int(linha_mes["total_docs"])
+                titulo = f"📅 {mes_nome}/{ano} — R$ {total_mes:,.2f} ({total_docs_mes} doc)"
+
+                with st.expander(titulo, expanded=False):
+                    df_docs = db.get_documentos_fiscais(mes=mes, ano=ano)
+                    if df_docs.empty:
+                        st.info("Sem documentos neste mês.")
+                    else:
+                        df_show = df_docs[[
+                            "data_documento", "descricao", "tipo", "valor",
+                            "arquivo_nome", "observacao"
+                        ]].copy()
+                        df_show["data_documento"] = pd.to_datetime(df_show["data_documento"]).dt.strftime("%d/%m/%Y")
+                        df_show.columns = [
+                            "Data", "Descrição", "Tipo", "Valor (R$)",
+                            "Arquivo", "Observação"
+                        ]
+                        st.dataframe(
+                            df_show.style.format({"Valor (R$)": "R$ {:,.2f}"}),
+                            use_container_width=True,
+                            hide_index=True,
+                        )
+
+                        # Botao para baixar todos do mes em ZIP
+                        col_zip, col_del = st.columns([1, 1])
+                        with col_zip:
+                            if st.button(
+                                f"📥 Baixar todos do mês (ZIP)",
+                                key=f"zip_mes_{ano}_{mes:02d}",
+                                use_container_width=True,
+                            ):
+                                # Monta o zip em memoria
+                                import zipfile
+                                from io import BytesIO
+                                buf = BytesIO()
+                                with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+                                    # Manifesto do mes
+                                    manifest_lines = [
+                                        f"Documentos Fiscais - {mes_nome}/{ano}",
+                                        f"Total: R$ {total_mes:,.2f}",
+                                        f"Quantidade: {total_docs_mes}",
+                                        "",
+                                        "Itens:",
+                                    ]
+                                    for _, doc in df_docs.iterrows():
+                                        manifest_lines.append(
+                                            f"- {pd.to_datetime(doc['data_documento']).strftime('%d/%m/%Y')} | "
+                                            f"{doc['tipo']} | R$ {doc['valor']:,.2f} | "
+                                            f"{doc['descricao']} | {doc.get('arquivo_nome') or 'sem arquivo'}"
+                                        )
+                                    zf.writestr(
+                                        f"manifesto_{ano}_{mes:02d}.txt",
+                                        "\n".join(manifest_lines),
+                                    )
+                                    # Anexa arquivos fisicos
+                                    for _, doc in df_docs.iterrows():
+                                        if doc.get("arquivo_path") and os.path.exists(str(doc["arquivo_path"])):
+                                            arq_path = str(doc["arquivo_path"])
+                                            arq_nome = str(doc.get("arquivo_nome") or os.path.basename(arq_path))
+                                            zf.write(arq_path, arcname=arq_nome)
+                                buf.seek(0)
+                                st.download_button(
+                                    label=f"⬇️ Clique para baixar ZIP ({mes_nome}/{ano})",
+                                    data=buf.getvalue(),
+                                    file_name=f"documentos_{ano}_{mes:02d}.zip",
+                                    mime="application/zip",
+                                    use_container_width=True,
+                                    key=f"download_zip_{ano}_{mes:02d}",
+                                )
+
+                        # Excluir documento individual
+                        with col_del:
+                            with st.expander("🗑️ Excluir documento deste mês", expanded=False):
+                                opcoes_del = [f"#{int(r['id'])} - {r['descricao']} - R$ {float(r['valor']):,.2f}" for _, r in df_docs.iterrows()]
+                                doc_del_str = st.selectbox(
+                                    "Selecione",
+                                    options=opcoes_del,
+                                    key=f"sel_del_doc_{ano}_{mes:02d}",
+                                )
+                                if doc_del_str and st.button(
+                                    "❌ Confirmar exclusão",
+                                    key=f"btn_del_doc_{ano}_{mes:02d}",
+                                    use_container_width=True,
+                                ):
+                                    doc_id_del = int(doc_del_str.split(" - ")[0].lstrip("#"))
+                                    ok_d, err_d = db.delete_documento_fiscal(doc_id_del)
+                                    if ok_d:
+                                        st.success(f"Documento #{doc_id_del} excluído.")
+                                        st.rerun()
+                                    else:
+                                        st.error(f"Erro: {err_d}")
 
 # --- CALCULADORA DE FRETE ---
 elif st.session_state.page == "🚚 Calculadora de Frete":

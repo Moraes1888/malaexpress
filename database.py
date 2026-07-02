@@ -10,7 +10,10 @@ DATA_DIR = os.getenv("MALAEXPRESS_DATA_DIR", BASE_DIR)
 DB_NAME = os.getenv("MALAEXPRESS_DB_PATH", os.path.join(DATA_DIR, "mala_express.db"))
 BACKUP_DIR = os.getenv("MALAEXPRESS_BACKUP_DIR", os.path.join(DATA_DIR, "backups"))
 BUNDLED_DB_PATH = os.path.join(BASE_DIR, "mala_express.db")
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
+
+# Pasta onde os arquivos de documentos fiscais sao salvos (usa /data se definido)
+DOCUMENTOS_DIR = os.getenv("MALAEXPRESS_DOCUMENTOS_DIR", os.path.join(DATA_DIR, "documentos_fiscais"))
 
 def ensure_data_storage():
     os.makedirs(os.path.dirname(DB_NAME), exist_ok=True)
@@ -24,7 +27,7 @@ def init_db():
     ensure_data_storage()
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
-    
+
     # Criar tabela de controle de versão do schema
     c.execute('''
         CREATE TABLE IF NOT EXISTS schema_version (
@@ -32,12 +35,32 @@ def init_db():
             data_atualizacao DATE DEFAULT CURRENT_DATE
         )
     ''')
-    
+
+    # Garante que tabelas que podem ter sido criadas em versoes posteriores
+    # tambem existam (caso o schema_version esteja adiantado mas a tabela nao)
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS documentos_fiscais (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            descricao TEXT NOT NULL,
+            tipo TEXT NOT NULL DEFAULT 'Nota Fiscal',
+            data_documento DATE NOT NULL,
+            valor REAL DEFAULT 0,
+            arquivo_nome TEXT,
+            arquivo_path TEXT,
+            arquivo_mime TEXT,
+            arquivo_tamanho INTEGER,
+            observacao TEXT,
+            criado_em DATE DEFAULT CURRENT_DATE
+        )
+    ''')
+    c.execute("CREATE INDEX IF NOT EXISTS idx_documentos_data ON documentos_fiscais(data_documento)")
+    os.makedirs(DOCUMENTOS_DIR, exist_ok=True)
+
     # Verificar versão atual do schema
     c.execute("SELECT versao FROM schema_version ORDER BY versao DESC LIMIT 1")
     row = c.fetchone()
     versao_atual = row[0] if row else 0
-    
+
     # Se schema já está na versão mais recente, pular migrações
     if versao_atual >= SCHEMA_VERSION:
         conn.close()
@@ -290,6 +313,46 @@ def init_db():
             )
         ''')
         c.execute("CREATE INDEX IF NOT EXISTS idx_vendas_data ON vendas_malas(data_venda)")
+
+    if versao_atual < 4:
+        # Tabela de Documentos Fiscais (notas, recibos) com upload de arquivos
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS documentos_fiscais (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                descricao TEXT NOT NULL,
+                tipo TEXT NOT NULL DEFAULT 'Nota Fiscal',
+                data_documento DATE NOT NULL,
+                valor REAL DEFAULT 0,
+                arquivo_nome TEXT,
+                arquivo_path TEXT,
+                arquivo_mime TEXT,
+                arquivo_tamanho INTEGER,
+                observacao TEXT,
+                criado_em DATE DEFAULT CURRENT_DATE
+            )
+        ''')
+        c.execute("CREATE INDEX IF NOT EXISTS idx_documentos_data ON documentos_fiscais(data_documento)")
+        # Pasta de armazenamento
+        os.makedirs(DOCUMENTOS_DIR, exist_ok=True)
+    else:
+        # Garante que a tabela existe mesmo se o schema_version ja for 4
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS documentos_fiscais (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                descricao TEXT NOT NULL,
+                tipo TEXT NOT NULL DEFAULT 'Nota Fiscal',
+                data_documento DATE NOT NULL,
+                valor REAL DEFAULT 0,
+                arquivo_nome TEXT,
+                arquivo_path TEXT,
+                arquivo_mime TEXT,
+                arquivo_tamanho INTEGER,
+                observacao TEXT,
+                criado_em DATE DEFAULT CURRENT_DATE
+            )
+        ''')
+        c.execute("CREATE INDEX IF NOT EXISTS idx_documentos_data ON documentos_fiscais(data_documento)")
+        os.makedirs(DOCUMENTOS_DIR, exist_ok=True)
 
     # Atualizar versão do schema
     c.execute("INSERT OR REPLACE INTO schema_version (versao, data_atualizacao) VALUES (?, CURRENT_DATE)", (SCHEMA_VERSION,))
@@ -1795,6 +1858,104 @@ def delete_venda_mala(venda_id):
         return False, str(e)
     finally:
         conn.close()
+
+# --- Documentos Fiscais ---
+def add_documento_fiscal(descricao, tipo, data_documento, valor, arquivo_nome=None,
+                          arquivo_path=None, arquivo_mime=None, arquivo_tamanho=None,
+                          observacao=None):
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    try:
+        c.execute(
+            '''INSERT INTO documentos_fiscais
+               (descricao, tipo, data_documento, valor, arquivo_nome, arquivo_path,
+                arquivo_mime, arquivo_tamanho, observacao)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+            (descricao, tipo, data_documento, valor, arquivo_nome, arquivo_path,
+             arquivo_mime, arquivo_tamanho, observacao),
+        )
+        conn.commit()
+        return True, None
+    except Exception as e:
+        conn.rollback()
+        return False, str(e)
+    finally:
+        conn.close()
+
+def get_documentos_fiscais(mes=None, ano=None):
+    conn = sqlite3.connect(DB_NAME)
+    query = "SELECT * FROM documentos_fiscais"
+    params = []
+    where = []
+    if mes is not None and ano is not None:
+        where.append("strftime('%m', data_documento) = ? AND strftime('%Y', data_documento) = ?")
+        params.extend([f"{int(mes):02d}", str(int(ano))])
+    if where:
+        query += " WHERE " + " AND ".join(where)
+    query += " ORDER BY data_documento DESC, id DESC"
+    df = pd.read_sql(query, conn, params=params)
+    conn.close()
+    return df
+
+def get_documentos_mensal():
+    """Retorna totais por mes/ano de documentos."""
+    conn = sqlite3.connect(DB_NAME)
+    df = pd.read_sql(
+        """SELECT
+              strftime('%Y-%m', data_documento) AS mes_ano,
+              strftime('%m', data_documento) AS mes,
+              strftime('%Y', data_documento) AS ano,
+              SUM(valor) AS total_valor,
+              COUNT(*) AS total_docs
+           FROM documentos_fiscais
+           GROUP BY strftime('%Y-%m', data_documento)
+           ORDER BY mes_ano DESC""",
+        conn,
+    )
+    conn.close()
+    return df
+
+def get_resumo_documentos():
+    """Retorna dict com totais gerais."""
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    c.execute("SELECT COALESCE(SUM(valor), 0), COUNT(*) FROM documentos_fiscais")
+    total_valor, total_docs = c.fetchone()
+    conn.close()
+    return {"total_valor": float(total_valor or 0), "total_docs": int(total_docs or 0)}
+
+def delete_documento_fiscal(doc_id):
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    try:
+        c.execute("SELECT arquivo_path FROM documentos_fiscais WHERE id = ?", (doc_id,))
+        row = c.fetchone()
+        c.execute("DELETE FROM documentos_fiscais WHERE id = ?", (doc_id,))
+        conn.commit()
+        # Remover arquivo fisico se existir
+        if row and row[0] and os.path.exists(row[0]):
+            try:
+                os.remove(row[0])
+            except Exception:
+                pass
+        return True, None
+    except Exception as e:
+        conn.rollback()
+        return False, str(e)
+    finally:
+        conn.close()
+
+def save_uploaded_file(uploaded_file, doc_id):
+    """Salva o arquivo enviado em DOCUMENTOS_DIR e retorna o caminho."""
+    os.makedirs(DOCUMENTOS_DIR, exist_ok=True)
+    # Nome seguro com ID e timestamp
+    ext = os.path.splitext(uploaded_file.name)[1]
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    safe_name = f"doc_{doc_id:06d}_{ts}{ext}"
+    full_path = os.path.join(DOCUMENTOS_DIR, safe_name)
+    with open(full_path, "wb") as f:
+        f.write(uploaded_file.getbuffer())
+    return full_path, safe_name
 
 def backup_db(max_backup=10):
     """Cria backup do banco de dados com timestamp. Mantém os últimos max_backup backups."""
