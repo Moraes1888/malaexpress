@@ -34,38 +34,6 @@ except Exception as e:
     st.error(f"Erro ao inicializar banco de dados: {e}")
     st.stop()
 
-# Estado de autenticacao
-if "auth_ok" not in st.session_state:
-    st.session_state.auth_ok = False
-if "usuario_logado" not in st.session_state:
-    st.session_state.usuario_logado = None
-
-# Tela de login (bloqueia o app inteiro ate logar)
-if not st.session_state.auth_ok:
-    st.title("🧳 MalaExpress")
-    st.subheader("Acesso ao Sistema")
-    st.info("Entre com seu email e senha para acessar.")
-
-    with st.form("form_login"):
-        email_in = st.text_input("Email", placeholder="ex: admin@malaexpress.local")
-        senha_in = st.text_input("Senha", type="password")
-        entrar = st.form_submit_button("Entrar", use_container_width=True)
-        if entrar:
-            usuario = db.authenticate_user(email_in, senha_in)
-            if usuario:
-                st.session_state.usuario_logado = usuario
-                st.session_state.auth_ok = True
-                st.success(f"Bem-vindo, {usuario['nome']}!")
-                st.rerun()
-            else:
-                st.error("Email ou senha invalidos.")
-
-    with st.expander("Acessos iniciais", expanded=True):
-        st.write("Administrador: `admin@malaexpress.local` / `MalaExpress2026!`")
-        st.write("Socio: `socio@malaexpress.local` / `Socio2026!`")
-        st.caption("O socio so tem acesso a Galeria de Malas Disponiveis e Registrar Novo Aluguel.")
-    st.stop()
-
 # --- FUNÇÕES DE DISTÂNCIA E CEP ---
 def get_coordinates_nominatim(query):
     try:
@@ -720,19 +688,9 @@ if is_external and is_mobile and st.session_state.page == "Dashboard":
     st.rerun()
 
 # Navegação Lateral
-menu_restrito = ["Novo Aluguel"]
-menu_completo = ["Dashboard", "Cadastrar Mala", "Cadastrar Cliente", "Novo Aluguel", "Devoluções", "Calendário de Reservas", "Análise Financeira", "Contrato de Aluguel", "🛒 Vender Mala", "📦 Estoque Atual", "📄 Documentos Fiscais", "🚚 Calculadora de Frete", "📱 Acesso Mobile"]
-# Menu do socio: apenas Galeria de Malas Disponiveis (Dashboard) e Registrar Novo Aluguel
-menu_socio = ["Dashboard", "Novo Aluguel"]
-
-# Define menu baseado no role do usuario logado
-user_role_atual = st.session_state.get("usuario_logado", {}).get("role", "admin")
-if user_role_atual == "socio":
-    menu = menu_socio
-elif is_external and is_mobile:
-    menu = menu_restrito
-else:
-    menu = menu_completo
+menu = ["Dashboard", "Cadastrar Mala", "Cadastrar Cliente", "Novo Aluguel", "Devoluções", "Calendário de Reservas", "Análise Financeira", "Contrato de Aluguel", "🛒 Vender Mala", "📦 Estoque Atual", "📄 Documentos Fiscais", "🚚 Calculadora de Frete", "📱 Acesso Mobile"]
+if is_external and is_mobile:
+    menu = ["Novo Aluguel"]
 
 # Mostrar info de conexão
 if is_external and is_mobile:
@@ -755,23 +713,6 @@ if is_external and is_mobile and st.session_state.page != "Novo Aluguel":
     st.warning("📱 Acesso mobile externo restrito. Apenas 'Novo Aluguel' está disponível.")
     st.session_state.page = "Novo Aluguel"
     st.rerun()
-
-# Se socio tentar acessar pagina fora do menu dele via URL, redireciona para Dashboard
-if user_role_atual == "socio" and st.session_state.page not in menu_socio:
-    st.warning("Sua conta nao tem permissao para essa area. Redirecionando para a Galeria de Malas...")
-    st.session_state.page = "Dashboard"
-    st.rerun()
-
-# Info do usuario logado e logout (sidebar)
-with st.sidebar:
-    st.divider()
-    user_atual = st.session_state.get("usuario_logado") or {}
-    role_emoji = "👑" if user_atual.get("role") == "admin" else "👤"
-    st.caption(f"{role_emoji} {user_atual.get('nome', 'Convidado')} ({user_atual.get('role', '?')})")
-    if st.button("Sair", use_container_width=True, key="btn_logout"):
-        st.session_state.auth_ok = False
-        st.session_state.usuario_logado = None
-        st.rerun()
 
 # --- DASHBOARD ---
 if st.session_state.page == "Dashboard":
