@@ -6,20 +6,53 @@ import shutil
 import hashlib
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DATA_DIR = os.getenv("MALAEXPRESS_DATA_DIR", BASE_DIR)
+
+
+def _resolve_writable_dir(env_var, default_relative):
+    """Tenta usar o caminho do env var; se nao der pra escrever, usa um sub-diretorio local."""
+    requested = os.getenv(env_var, "")
+    if requested:
+        try:
+            os.makedirs(requested, exist_ok=True)
+            # Tenta escrever para confirmar permissao
+            test_file = os.path.join(requested, ".write_test")
+            with open(test_file, "w") as f:
+                f.write("ok")
+            os.remove(test_file)
+            return requested
+        except Exception:
+            # Fallback para dentro do app (nao persiste em redeploy, mas pelo menos roda)
+            pass
+    fallback = os.path.join(BASE_DIR, default_relative)
+    try:
+        os.makedirs(fallback, exist_ok=True)
+    except Exception:
+        pass
+    return fallback
+
+
+# Diretorio principal de dados (persistente se /data existir e for gravavel)
+DATA_DIR = _resolve_writable_dir("MALAEXPRESS_DATA_DIR", "data")
 DB_NAME = os.getenv("MALAEXPRESS_DB_PATH", os.path.join(DATA_DIR, "mala_express.db"))
 BACKUP_DIR = os.getenv("MALAEXPRESS_BACKUP_DIR", os.path.join(DATA_DIR, "backups"))
 BUNDLED_DB_PATH = os.path.join(BASE_DIR, "mala_express.db")
 SCHEMA_VERSION = 4
 
-# Pasta onde os arquivos de documentos fiscais sao salvos (usa /data se definido)
-DOCUMENTOS_DIR = os.getenv("MALAEXPRESS_DOCUMENTOS_DIR", os.path.join(DATA_DIR, "documentos_fiscais"))
-# Pasta onde as imagens das malas sao salvas (persistir em /data se definido)
-IMAGENS_DIR = os.getenv("MALAEXPRESS_IMAGENS_DIR", os.path.join(DATA_DIR, "imagens_malas"))
+# Pasta onde os arquivos de documentos fiscais sao salvos
+DOCUMENTOS_DIR = _resolve_writable_dir("MALAEXPRESS_DOCUMENTOS_DIR", os.path.join("data", "documentos_fiscais"))
+# Pasta onde as imagens das malas sao salvas
+IMAGENS_DIR = _resolve_writable_dir("MALAEXPRESS_IMAGENS_DIR", os.path.join("data", "imagens_malas"))
+
 
 def ensure_data_storage():
-    os.makedirs(os.path.dirname(DB_NAME), exist_ok=True)
-    os.makedirs(BACKUP_DIR, exist_ok=True)
+    try:
+        os.makedirs(os.path.dirname(DB_NAME), exist_ok=True)
+    except Exception:
+        pass
+    try:
+        os.makedirs(BACKUP_DIR, exist_ok=True)
+    except Exception:
+        pass
 
     # No primeiro deploy online, copia o banco atual do projeto para o disco persistente.
     if not os.path.exists(DB_NAME) and os.path.exists(BUNDLED_DB_PATH) and os.path.abspath(DB_NAME) != os.path.abspath(BUNDLED_DB_PATH):
