@@ -8,26 +8,41 @@ import hashlib
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
+def _test_writable_dir(path):
+    """Retorna True se conseguir criar diretorio + arquivo .db de teste."""
+    try:
+        os.makedirs(path, exist_ok=True)
+        # Teste de escrita
+        test_file = os.path.join(path, ".write_test_" + str(os.getpid()))
+        with open(test_file, "w") as f:
+            f.write("ok")
+        os.remove(test_file)
+        # Teste de sqlite
+        import sqlite3 as _sq
+        _test_db = os.path.join(path, ".sqlite_test_" + str(os.getpid()))
+        _c = _sq.connect(_test_db)
+        _c.execute("CREATE TABLE _t (x INTEGER)")
+        _c.execute("INSERT INTO _t VALUES (1)")
+        _c.commit()
+        _c.close()
+        os.remove(_test_db)
+        return True
+    except Exception:
+        return False
+
+
 def _resolve_writable_dir(env_var, default_relative):
     """Tenta usar o caminho do env var; se nao der pra escrever, usa um sub-diretorio local."""
     requested = os.getenv(env_var, "")
-    if requested:
-        try:
-            os.makedirs(requested, exist_ok=True)
-            # Tenta escrever para confirmar permissao
-            test_file = os.path.join(requested, ".write_test")
-            with open(test_file, "w") as f:
-                f.write("ok")
-            os.remove(test_file)
-            return requested
-        except Exception:
-            # Fallback para dentro do app (nao persiste em redeploy, mas pelo menos roda)
-            pass
     fallback = os.path.join(BASE_DIR, default_relative)
-    try:
-        os.makedirs(fallback, exist_ok=True)
-    except Exception:
-        pass
+    # Garante que o fallback existe e eh gravavel
+    if not _test_writable_dir(fallback):
+        try:
+            os.makedirs(fallback, exist_ok=True)
+        except Exception:
+            pass
+    if requested and _test_writable_dir(requested):
+        return requested
     return fallback
 
 
@@ -45,18 +60,41 @@ IMAGENS_DIR = _resolve_writable_dir("MALAEXPRESS_IMAGENS_DIR", os.path.join("dat
 
 
 def ensure_data_storage():
+    global DB_NAME, BACKUP_DIR, DATA_DIR
+    # Garante que o diretorio de backups existe
     try:
-        os.makedirs(os.path.dirname(DB_NAME), exist_ok=True)
-    except Exception:
-        pass
-    try:
-        os.makedirs(BACKUP_DIR, exist_ok=True)
+        if BACKUP_DIR and not os.path.exists(BACKUP_DIR):
+            os.makedirs(BACKUP_DIR, exist_ok=True)
     except Exception:
         pass
 
-    # No primeiro deploy online, copia o banco atual do projeto para o disco persistente.
-    if not os.path.exists(DB_NAME) and os.path.exists(BUNDLED_DB_PATH) and os.path.abspath(DB_NAME) != os.path.abspath(BUNDLED_DB_PATH):
-        shutil.copy2(BUNDLED_DB_PATH, DB_NAME)
+    # Se DB_NAME nao existe, copia o banco bundled
+    if (not os.path.exists(DB_NAME)) and os.path.exists(BUNDLED_DB_PATH) and os.path.abspath(DB_NAME) != os.path.abspath(BUNDLED_DB_PATH):
+        try:
+            shutil.copy2(BUNDLED_DB_PATH, DB_NAME)
+        except Exception:
+            pass
+
+    # Teste final: se nao conseguir abrir o DB, troca para fallback garantido
+    try:
+        import sqlite3 as _sq
+        _c = _sq.connect(DB_NAME)
+        _c.execute("SELECT 1")
+        _c.close()
+    except Exception:
+        # DB nao pode ser aberto - troca para o fallback local
+        new_dir = os.path.join(BASE_DIR, "data_runtime")
+        os.makedirs(new_dir, exist_ok=True)
+        DATA_DIR = new_dir
+        DB_NAME = os.path.join(new_dir, "mala_express.db")
+        BACKUP_DIR = os.path.join(new_dir, "backups")
+        os.makedirs(BACKUP_DIR, exist_ok=True)
+        # Copia o bundled para o novo local
+        if os.path.exists(BUNDLED_DB_PATH):
+            try:
+                shutil.copy2(BUNDLED_DB_PATH, DB_NAME)
+            except Exception:
+                pass
 
 def init_db():
     ensure_data_storage()
