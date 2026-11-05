@@ -124,6 +124,37 @@ UF_SINTAXE = {
     "tocantins": "TO",
 }
 
+# Frases comuns de WhatsApp que não são nome de cliente
+FRASES_NAO_NOME = {
+    "mala express", "malaexpres", "me envia", "ola", "ola tudo bem",
+    "boa tarde", "bom dia", "boa noite", "por favor", "obrigado",
+    "obrigada", "segue os dados", "dados", "preencher", "cadastro",
+    "aqui esta", "segue", "preciso", "atenciosamente",
+}
+
+# Formato de nome: cada palavra com inicial maiúscula
+RE_PALAVRA_NOME = re.compile(r"^[A-ZÁÉÍÓÚÂÊÔÃÕÇ][a-záéíóúâêôãõç]{1,}$")
+
+# Conectivos que podem aparecer no meio do nome ("Maria da Silva")
+CONECTIVOS_NOME = {"da", "de", "do", "das", "dos", "e"}
+
+# Palavras que nunca fazem parte de um nome de pessoa
+PALAVRAS_NAO_NOME = {
+    "rua", "r", "avenida", "av", "travessa", "praca", "rodovia", "estrada",
+    "alameda", "condominio", "bloco", "apto", "apt", "apartamento", "casa",
+    "sala", "lote", "quadra", "bairro", "jardim", "parque", "residencial",
+    "edificio", "andar", "cep", "cpf", "cnpj", "telefone", "celular",
+    "whatsapp", "email", "destino", "ida", "volta", "data", "nome",
+    "documento", "endereco", "cidade", "mala", "express", "malaexpress",
+    "ola", "opa", "e-mail",
+}
+
+# Linha que parece endereço (rua/avenida + número)
+RE_LINHA_ENDERECO = re.compile(
+    r"\b(rua|r\.|avenida|av\.|travessa|alamenda|rodovia|estrada|praca|praça)\b",
+    re.IGNORECASE,
+)
+
 
 # --------------------------------------------------------------------------
 # Utilidades
@@ -211,7 +242,7 @@ def _separar_cidade(endereco):
     if len(partes) >= 2 and len(partes[-1][0]) == 2 and partes[-1][0].isalpha():
         uf = UF_SINTAXE.get(_chave(partes[-1][0]), partes[-1][0].upper())
         nome, uf2 = _cidade_e_uf(partes[-2][0])
-        if nome:
+        if nome and (uf2 or uf or _parece_cidade(nome)):
             return endereco[:partes[-2][1]].strip(" ,;-"), nome, (uf2 or uf)
 
     for i in range(len(partes) - 1, -1, -1):
@@ -223,7 +254,9 @@ def _separar_cidade(endereco):
             break  # a parte tem número -> não é cidade
 
         nome, uf = _cidade_e_uf(p)
-        if nome:
+        # Só aceita como cidade se for conhecida, tiver UF ou parecer cidade
+        # (evita tratar "Bloco A" / "Apto 104" como cidade)
+        if nome and (uf or _chave(nome) in CIDADES_UF):
             return endereco[:pos_inicio].strip(" ,;-"), nome, uf
 
         if _parece_cidade(p):
@@ -276,15 +309,32 @@ def _limpar_documento(valor):
 
 
 def _limpar_telefone(valor):
-    """Retorna somente os dígitos do telefone."""
+    """
+    Retorna somente os dígitos do telefone.
+
+    Ignora horários de chat grudados no número (ex.: "15998456069 17:52"):
+    cada bloco de dígitos é avaliado isoladamente.
+    """
     if not valor:
         return ""
-    digitos = re.sub(r"\D", "", valor)
-    if len(digitos) == 11 and digitos.startswith("0"):
-        digitos = digitos[1:]
-    if len(digitos) > 11:
-        digitos = digitos[-11:]
-    return digitos
+    blocos = re.findall(r"\d+", valor)
+    # 1º passo: bloco isolado com 10 ou 11 dígitos (formato de telefone)
+    for bloco in blocos:
+        digitos = bloco
+        if len(digitos) == 12 and digitos.startswith("0"):
+            digitos = digitos[1:]
+        if len(digitos) in (10, 11):
+            return digitos
+    # 2º passo: todos os dígitos juntos (ex.: "(15) 99845-6069")
+    juntos = "".join(blocos)
+    if len(juntos) == 12 and juntos.startswith("0"):
+        juntos = juntos[1:]
+    if len(juntos) in (10, 11):
+        return juntos
+    # 3º passo: número colado com horário -> mantém só os 11 primeiros
+    if len(juntos) > 11:
+        return juntos[:11]
+    return ""
 
 
 def _limpar_cep(valor):
@@ -293,6 +343,103 @@ def _limpar_cep(valor):
         return ""
     digitos = re.sub(r"\D", "", valor)
     return digitos if len(digitos) == 8 else ""
+
+
+# --------------------------------------------------------------------------
+# Tolerância: validação de nome e buscas sem rótulo
+# --------------------------------------------------------------------------
+def _palavra_parece_nome(palavra):
+    """True se a palavra tem cara de nome de pessoa."""
+    p = palavra.strip(".,;:!?-")
+    if not p:
+        return False
+    if p.lower() in CONECTIVOS_NOME:
+        return True
+    return bool(RE_PALAVRA_NOME.match(p))
+
+
+def _texto_parece_nome(texto, minimo=1):
+    """True se o texto parece um nome de pessoa."""
+    if not texto:
+        return False
+    palavras = [p.strip(".,;:!?-") for p in texto.split() if p.strip(".,;:!?-")]
+    if len(palavras) < minimo or len(palavras) > 6:
+        return False
+    if any(ch.isdigit() for ch in texto):
+        return False
+    for p in palavras:
+        if p.lower() in PALAVRAS_NAO_NOME:
+            return False
+        if not _palavra_parece_nome(p):
+            return False
+    return True
+
+
+def _limpar_nome(valor):
+    """
+    Devolve o nome se parecer com nome de pessoa; '' caso contrário.
+    Frases de WhatsApp ("Mala Express", "Me envia...") são descartadas.
+    """
+    if not valor:
+        return ""
+    texto = re.sub(r"\s+", " ", valor).strip()
+    texto = texto.split(" - ")[0].strip()
+    if not texto:
+        return ""
+
+    chave = _chave(texto)
+    if chave in FRASES_NAO_NOME:
+        return ""
+    for frase in FRASES_NAO_NOME:
+        if chave.startswith(frase + " ") or chave.endswith(" " + frase):
+            return ""
+
+    # Nome digitado em caixa alta -> "Hellen Almeida"
+    if texto.isupper():
+        texto = " ".join(p.capitalize() for p in texto.split())
+
+    if not _texto_parece_nome(texto):
+        return ""
+    return texto
+
+
+def _buscar_documento_no_texto(texto):
+    """Procura um CPF/CNPJ com máscara no texto (sem depender do rótulo)."""
+    if not texto:
+        return ""
+    m = re.search(r"\d{3}\.\d{3}\.\d{3}-\d{2}|\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2}", texto)
+    return m.group(0) if m else ""
+
+
+def _buscar_telefone_no_texto(texto):
+    """Procura um telefone de 11 dígitos no texto (sem depender do rótulo)."""
+    if not texto:
+        return ""
+    for linha in texto.split("\n"):
+        chave = _chave(linha)
+        if any(pal in chave for pal in ("cpf", "cnpj", "documento")):
+            continue
+        limpo = re.sub(r"\d{3}\.\d{3}\.\d{3}-\d{2}", " ", linha)
+        m = re.search(r"(?<!\d)(\d{11})(?!\d)", limpo)
+        if m:
+            return m.group(1)
+    return ""
+
+
+def _buscar_cep_no_texto(texto):
+    """Procura um CEP no formato 00000-000 no texto (sem depender do rótulo)."""
+    if not texto:
+        return ""
+    m = re.search(r"(?<!\d)\d{5}-\d{3}(?!\d)", texto)
+    return m.group(0).replace("-", "") if m else ""
+
+
+def _buscar_endereco_no_texto(linhas):
+    """Procura a primeira linha que parece endereço (rua/avenida + número)."""
+    for linha in linhas:
+        if RE_LINHA_ENDERECO.search(linha) and re.search(r"\d", linha):
+            return linha.strip(" ,;-")
+    return ""
 
 
 # --------------------------------------------------------------------------
@@ -323,11 +470,13 @@ def extrair_dados_cliente(texto):
 
     grupos = []          # [(campo, [linhas])]
     campo_atual = None
+    linhas = []          # todas as linhas não vazias do texto original
 
     for linha_bruta in str(texto).replace("\r\n", "\n").replace("\r", "\n").split("\n"):
         linha = linha_bruta.strip()
         if not linha:
             continue
+        linhas.append(linha)
 
         achado = _identificar_rotulo(linha)
         if achado:
@@ -336,6 +485,10 @@ def extrair_dados_cliente(texto):
             campo_atual = campo
         elif campo_atual in CAMPOS_COM_CONTINUACAO and grupos:
             # Linha de continuação (endereço quebrado em várias linhas)
+            if campo_atual == "nome" and not _texto_parece_nome(linha):
+                # Não parece nome: não continua o campo nome
+                campo_atual = None
+                continue
             grupos[-1][1].append(linha)
 
     def primeiro(campo):
@@ -344,14 +497,36 @@ def extrair_dados_cliente(texto):
                 return " ".join(p for p in partes if p).strip()
         return ""
 
-    nome = primeiro("nome")
-    if nome:
-        # Corta eventual continuação colada (ex.: nome + endereço)
-        nome = nome.split(" - ")[0].strip()
-        nome = re.sub(r"\s+", " ", nome)
+    def primeiro_nome():
+        for c, partes in grupos:
+            if c != "nome":
+                continue
+            acumulado = ""
+            for parte in partes:
+                if not parte:
+                    continue
+                if acumulado:
+                    if not _texto_parece_nome(parte):
+                        break
+                    acumulado = f"{acumulado} {parte}"
+                else:
+                    acumulado = parte
+            return acumulado.strip()
+        return ""
+
+    nome = _limpar_nome(primeiro_nome())
+    if not nome:
+        # Sem rótulo de nome: procura uma linha que pareça nome de pessoa
+        for linha in linhas:
+            if _texto_parece_nome(linha, minimo=2):
+                nome = _limpar_nome(linha)
+                if nome:
+                    break
 
     endereco = primeiro("endereco")
     endereco = re.sub(r"\s+", " ", endereco).strip(" ,;-")
+    if not endereco:
+        endereco = _buscar_endereco_no_texto(linhas)
 
     cidade_explicita = primeiro("cidade")
     cidade, uf = ("", "")
@@ -363,9 +538,25 @@ def extrair_dados_cliente(texto):
         cidade, uf = cidade_endereco, uf_endereco
     endereco = endereco_sem_cidade.strip(" ,;-")
 
+    if not cidade:
+        # Procura uma linha que seja o nome de uma cidade conhecida
+        for linha in linhas:
+            chave = _chave(linha)
+            if chave in CIDADES_UF:
+                cidade, uf = linha.strip(), CIDADES_UF[chave]
+                break
+
     documento = _limpar_documento(primeiro("documento"))
+    if not documento:
+        documento = _buscar_documento_no_texto("\n".join(linhas))
+
     telefone = _limpar_telefone(primeiro("telefone"))
+    if not telefone:
+        telefone = _buscar_telefone_no_texto("\n".join(linhas))
+
     cep = _limpar_cep(primeiro("cep"))
+    if not cep:
+        cep = _buscar_cep_no_texto("\n".join(linhas))
 
     resultado.update({
         "nome": nome,

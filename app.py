@@ -725,18 +725,12 @@ def invalidate_cache():
 def preencher_cadastro_cliente(texto, buscar_cep=True):
     """
     Lê a mensagem colada do WhatsApp e preenche os campos do formulário de
-    cliente. O usuário revisa os dados antes de salvar.
+    cliente.
+
+    Não bloqueia o cadastro: o que foi identificado entra nos campos e o que
+    não deu para identificar fica em branco (pode salvar assim mesmo).
     """
     dados = extrair_dados_cliente(texto)
-
-    if not (dados["nome"] or dados["documento"] or dados["telefone"]):
-        st.session_state["cli_whats_msg"] = (
-            "erro",
-            "Não consegui identificar os dados na mensagem. "
-            "Confira o texto colado ou preencha o formulário manualmente."
-        )
-        st.rerun()
-        return
 
     key = st.session_state.form_cliente_key
     if dados["nome"]:
@@ -768,25 +762,40 @@ def preencher_cadastro_cliente(texto, buscar_cep=True):
     if cidade_uf:
         st.session_state[f"cli_cid_{key}"] = cidade_uf
 
-    faltando = [
-        rotulo for rotulo, valor in
-        (("Nome", dados["nome"]), ("CPF", dados["documento"]))
-        if not valor
-    ]
-    if faltando:
-        mensagem = (
-            f"Preenchido o que identifiquei, mas falta: {', '.join(faltando)}. "
-            "Complete antes de cadastrar."
+    # Campos que ficaram em branco (ignorados no preenchimento).
+    # A cidade não entra na lista: o formulário já tem um valor padrão.
+    em_branco = [
+        rotulo for chave, rotulo in (
+            (f"cli_nome_{key}", "Nome"),
+            (f"cli_documento_{key}", "CPF"),
+            (f"cli_end_{key}", "Endereço"),
+            (f"cli_cep_{key}", "CEP"),
+            (f"cli_tel_{key}", "Telefone"),
         )
+        if not st.session_state.get(chave)
+    ]
+
+    if not any(dados.values()):
+        mensagem = (
+            "Não consegui identificar nenhum campo na mensagem. "
+            "Preencha o formulário manualmente e salve — não precisa colar de novo."
+        )
+        tipo = "aviso"
     else:
         mensagem = "Dados preenchidos. Revise e clique em 'Cadastrar'."
+        if em_branco:
+            mensagem += (
+                f" Não identifiquei: {', '.join(em_branco)} — "
+                "ficaram em branco, pode salvar assim e completar depois."
+            )
+        tipo = "sucesso"
 
     if dados["destino"] or dados["data_ida"] or dados["data_volta"]:
         mensagem += (
             " Destino e datas são dados da viagem: preencha na tela 'Novo Aluguel'."
         )
 
-    st.session_state["cli_whats_msg"] = ("sucesso", mensagem)
+    st.session_state["cli_whats_msg"] = (tipo, mensagem)
     st.rerun()
 
 def limpar_texto_whatsapp():
@@ -1693,7 +1702,8 @@ elif st.session_state.page == "Cadastrar Cliente":
     with st.expander("⚡ Colar mensagem do WhatsApp (preencher automático)", expanded=False):
         st.caption(
             "Cole aqui a mensagem que o cliente enviou no WhatsApp e clique em "
-            "'Preencher cadastro'. Os dados identificados são revisados antes de salvar."
+            "'Preencher cadastro'. O que for identificado preenche o formulário; "
+            "se faltar alguma coisa, você pode salvar assim mesmo e completar depois."
         )
         texto_whats = st.text_area(
             "Mensagem do cliente",
@@ -1739,7 +1749,12 @@ elif st.session_state.page == "Cadastrar Cliente":
         submit = st.form_submit_button("Cadastrar", on_click=limpar_texto_whatsapp)
         
         if submit:
-            if nome:
+            # Salva com o que foi preenchido: campos em branco são ignorados
+            if not (nome or documento or telefone):
+                st.warning(
+                    "Informe pelo menos o nome, o CPF ou o telefone para cadastrar."
+                )
+            else:
                 cliente_existente = db.buscar_cliente_por_documento(documento)
                 if cliente_existente:
                     st.error(f"⚠️ Cliente já cadastrado: **{cliente_existente['nome']}** (Telefone: {cliente_existente['telefone']})")
@@ -1757,13 +1772,21 @@ elif st.session_state.page == "Cadastrar Cliente":
                     sucesso, erro_add = db.add_cliente(nome, documento, cep, endereco, cidade, telefone)
                     if sucesso:
                         invalidate_cache()
-                        st.success(f"Cliente {nome} cadastrado com sucesso!")
+                        vazios = [
+                            rotulo for rotulo, valor in (
+                                ("Nome", nome), ("CPF", documento), ("Endereço", endereco),
+                                ("CEP", cep), ("Cidade", cidade), ("Telefone", telefone),
+                            ) if not valor
+                        ]
+                        aviso = (
+                            f" Campos em branco: {', '.join(vazios)} (complete depois)."
+                            if vazios else ""
+                        )
+                        st.success(f"Cliente {nome or '(sem nome)'} cadastrado com sucesso!{aviso}")
                         st.session_state.form_cliente_key += 1
                         st.rerun()
                     else:
                         st.error(f"❌ Não foi possível cadastrar: {erro_add}")
-            else:
-                st.warning("Nome é obrigatório.")
                 
     st.divider()
     st.subheader("Clientes Cadastrados e Gerenciamento")
