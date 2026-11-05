@@ -749,9 +749,30 @@ def add_cliente(nome, documento, cep, endereco="", cidade="", telefone=""):
         conn.close()
 
 def buscar_cliente_por_documento(documento):
-    """Busca cliente pelo documento (CPF/CNPJ). Retorna o cliente ou None."""
+    """Busca cliente pelo documento (CPF/CNPJ). Retorna o cliente ou None.
+
+    Para CPF/CNPJ a comparação usa apenas os dígitos, evitando cadastrar
+    o mesmo cliente duas vezes por diferença de formatação.
+    """
+    if not documento:
+        return None
+
+    documento = str(documento).strip()
+    digitos = ''.join(c for c in documento if c.isdigit())
+
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
+
+    if digitos and len(digitos) in (11, 14):
+        c.execute("SELECT id, nome, documento, telefone FROM clientes")
+        for row in c.fetchall():
+            digitos_bd = ''.join(ch for ch in (row[2] or '') if ch.isdigit())
+            if digitos_bd and digitos_bd == digitos:
+                conn.close()
+                return {'id': row[0], 'nome': row[1], 'documento': row[2], 'telefone': row[3]}
+        conn.close()
+        return None
+
     c.execute("SELECT id, nome, documento, telefone FROM clientes WHERE documento = ?", (documento,))
     row = c.fetchone()
     conn.close()

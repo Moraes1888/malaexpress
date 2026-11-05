@@ -17,6 +17,8 @@ from io import BytesIO
 from pyngrok import ngrok
 from fpdf import FPDF
 import hashlib
+import re
+from parser_cliente import extrair_dados_cliente, UF_SINTAXE
 
 # Cache para coordenadas CEP
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -75,6 +77,68 @@ def get_coordinates_from_cep(cep):
         pass
     
     return None, None
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def buscar_cep_e_cidade_por_endereco(endereco, cidade=""):
+    """
+    Geocodifica o endereço (OpenStreetMap/Nominatim) para descobrir CEP,
+    cidade e UF. Retorna (cep, cidade/uf, uf). Nunca levanta exceção.
+    """
+    if not endereco:
+        return "", "", ""
+
+    # Usa apenas a parte inicial do endereço (rua/número), pois complementos
+    # como "Bloco A" ou "Apto 104" costumam impedir a localização.
+    rua = endereco.split(" - ")[0].strip()
+    consultas = []
+    if cidade:
+        consultas.append(f"{rua}, {cidade}, Brazil")
+        consultas.append(f"{cidade}, Brazil")
+    consultas.append(f"{rua}, Brazil")
+
+    for consulta in consultas:
+        try:
+            resposta = requests.get(
+                "https://nominatim.openstreetmap.org/search",
+                params={
+                    "q": consulta,
+                    "format": "json",
+                    "limit": 1,
+                    "addressdetails": 1,
+                    "countrycodes": "br",
+                },
+                headers={"User-Agent": "MalaExpressApp/1.0"},
+                timeout=6,
+            )
+            if resposta.status_code != 200:
+                continue
+            resultados = resposta.json()
+            if not resultados:
+                continue
+
+            info = resultados[0].get("address") or {}
+            cep = re.sub(r"\D", "", info.get("postcode", "") or "")
+            if len(cep) != 8:
+                achado = re.search(r"(\d{5})-?(\d{3})", resultados[0].get("display_name", ""))
+                cep = (achado.group(1) + achado.group(2)) if achado else ""
+
+            cidade_api = (
+                info.get("city") or info.get("town") or info.get("village")
+                or info.get("municipality") or ""
+            )
+            uf = ""
+            iso = info.get("ISO3166-2-lvl4") or ""
+            if "-" in iso:
+                uf = iso.split("-")[-1].upper()
+            if not uf:
+                uf = UF_SINTAXE.get(info.get("state", "").lower(), "")
+
+            cidade_uf = f"{cidade_api}/{uf}" if cidade_api and uf else cidade_api
+            return cep, cidade_uf, uf
+        except Exception:
+            continue
+
+    return "", "", ""
 
 def haversine(lat1, lon1, lat2, lon2):
     R = 6371  # Raio da Terra em km
@@ -656,6 +720,83 @@ def invalidate_cache():
     get_malas_cached.clear()
     get_clientes_cached.clear()
     get_gestores_cached.clear()
+
+# --- PREENCHIMENTO AUTOMÁTICO DO CADASTRO DE CLIENTE (mensagem de WhatsApp) ---
+def preencher_cadastro_cliente(texto, buscar_cep=True):
+    """
+    Lê a mensagem colada do WhatsApp e preenche os campos do formulário de
+    cliente. O usuário revisa os dados antes de salvar.
+    """
+    dados = extrair_dados_cliente(texto)
+
+    if not (dados["nome"] or dados["documento"] or dados["telefone"]):
+        st.session_state["cli_whats_msg"] = (
+            "erro",
+            "Não consegui identificar os dados na mensagem. "
+            "Confira o texto colado ou preencha o formulário manualmente."
+        )
+        st.rerun()
+        return
+
+    key = st.session_state.form_cliente_key
+    if dados["nome"]:
+        st.session_state[f"cli_nome_{key}"] = dados["nome"]
+    if dados["documento"]:
+        st.session_state[f"cli_documento_{key}"] = dados["documento"]
+    if dados["telefone"]:
+        st.session_state[f"cli_tel_{key}"] = dados["telefone"]
+    if dados["endereco"]:
+        st.session_state[f"cli_end_{key}"] = dados["endereco"]
+    if dados["cep"]:
+        st.session_state[f"cli_cep_{key}"] = dados["cep"]
+
+    cidade_uf = ""
+    if dados["cidade"]:
+        cidade_uf = f"{dados['cidade']}/{dados['uf']}" if dados["uf"] else dados["cidade"]
+
+    # Complementa CEP/cidade pela geocodificação (endereço do WhatsApp
+    # normalmente não vem com CEP)
+    if buscar_cep and dados["endereco"] and not dados["cep"]:
+        cep_api, cidade_api, _ = buscar_cep_e_cidade_por_endereco(
+            dados["endereco"], dados["cidade"]
+        )
+        if cep_api:
+            st.session_state[f"cli_cep_{key}"] = cep_api
+        if cidade_api and not cidade_uf:
+            cidade_uf = cidade_api
+
+    if cidade_uf:
+        st.session_state[f"cli_cid_{key}"] = cidade_uf
+
+    faltando = [
+        rotulo for rotulo, valor in
+        (("Nome", dados["nome"]), ("CPF", dados["documento"]))
+        if not valor
+    ]
+    if faltando:
+        mensagem = (
+            f"Preenchido o que identifiquei, mas falta: {', '.join(faltando)}. "
+            "Complete antes de cadastrar."
+        )
+    else:
+        mensagem = "Dados preenchidos. Revise e clique em 'Cadastrar'."
+
+    if dados["destino"] or dados["data_ida"] or dados["data_volta"]:
+        mensagem += (
+            " Destino e datas são dados da viagem: preencha na tela 'Novo Aluguel'."
+        )
+
+    st.session_state["cli_whats_msg"] = ("sucesso", mensagem)
+    st.rerun()
+
+def limpar_texto_whatsapp():
+    """Limpa a mensagem colada após o cadastro (callback do botão)."""
+    key = st.session_state.get("form_cliente_key", 0)
+    documento = st.session_state.get(f"cli_documento_{key}", "")
+    if documento and db.buscar_cliente_por_documento(documento):
+        # Cliente já cadastrado: mantém o texto para conferência
+        return
+    st.session_state["cli_whats_texto"] = ""
 
 # Criar pasta de imagens se não existir
 if not os.path.exists("imagens_malas"):
@@ -1539,24 +1680,63 @@ elif st.session_state.page == "Cadastrar Mala":
 # --- CADASTRAR CLIENTE ---
 elif st.session_state.page == "Cadastrar Cliente":
     st.subheader("Cadastrar Novo Cliente")
-    
+
+    # Mensagem do botão "Preencher cadastro" (exibida após o rerun)
+    if st.session_state.get("cli_whats_msg"):
+        tipo_msg, texto_msg = st.session_state.pop("cli_whats_msg")
+        if tipo_msg == "sucesso":
+            st.success(texto_msg)
+        else:
+            st.warning(texto_msg)
+
+    # --- ATALHO: colar a mensagem recebida no WhatsApp ---
+    with st.expander("⚡ Colar mensagem do WhatsApp (preencher automático)", expanded=False):
+        st.caption(
+            "Cole aqui a mensagem que o cliente enviou no WhatsApp e clique em "
+            "'Preencher cadastro'. Os dados identificados são revisados antes de salvar."
+        )
+        texto_whats = st.text_area(
+            "Mensagem do cliente",
+            height=140,
+            key="cli_whats_texto",
+            placeholder="Cole aqui a mensagem do WhatsApp...",
+        )
+        col_auto, col_botao = st.columns([1, 2])
+        with col_auto:
+            buscar_cep_auto = st.checkbox(
+                "Buscar CEP e cidade automaticamente (usa internet)",
+                value=True,
+                key="cli_whats_buscar_cep",
+            )
+        with col_botao:
+            st.write("")
+            if st.button(
+                "⚡ Preencher cadastro",
+                type="primary",
+                key="btn_preencher_cliente",
+                use_container_width=True,
+            ):
+                preencher_cadastro_cliente(texto_whats, buscar_cep_auto)
+
     with st.form("form_cliente"):
         # Usar key dinâmica para resetar formulário
         key_suffix = st.session_state.form_cliente_key
-        
+
         nome = st.text_input("Nome Completo", key=f"cli_nome_{key_suffix}")
-        
+
         col1, col2 = st.columns(2)
         documento = col1.text_input("Documento (CPF)", key=f"cli_documento_{key_suffix}")
         cep = col2.text_input("CEP", key=f"cli_cep_{key_suffix}")
-        
+
         col_tel, col_cid = st.columns([1, 1])
         telefone = col_tel.text_input("Celular/WhatsApp", key=f"cli_tel_{key_suffix}")
-        cidade = col_cid.text_input("Cidade/UF", value="Votorantim/SP", key=f"cli_cid_{key_suffix}")
-        
+        if f"cli_cid_{key_suffix}" not in st.session_state:
+            st.session_state[f"cli_cid_{key_suffix}"] = "Votorantim/SP"
+        cidade = col_cid.text_input("Cidade/UF", key=f"cli_cid_{key_suffix}")
+
         endereco = st.text_input("Endereço Completo (Rua, Nº, Bairro)", key=f"cli_end_{key_suffix}")
-        
-        submit = st.form_submit_button("Cadastrar")
+
+        submit = st.form_submit_button("Cadastrar", on_click=limpar_texto_whatsapp)
         
         if submit:
             if nome:
